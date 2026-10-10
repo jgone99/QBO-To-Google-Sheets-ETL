@@ -34,17 +34,19 @@ def get_new_and_changed_invoices(datetime: str = None) -> list[dict]:
 
     return _clean_invoices(raw_invoices)
 
-def get_all_invoices() -> list[dict]:
+def get_all_invoices_since(date_str: str) -> list[dict]:
     realm_id = os.getenv("QBO_REALM_ID")
     access_token = get_access_token()
 
-    invoice_count = query(realm_id, access_token, "SELECT COUNT(*) FROM Invoice")['QueryResponse']['totalCount']
+    where_clause = f"WHERE TxnDate >= '{date_str}'"
+
+    invoice_count = query(realm_id, access_token, f"SELECT COUNT(*) FROM Invoice {where_clause}")['QueryResponse']['totalCount']
 
     raw_invoices = []
     start_position = 1
 
     while True:
-        query_string = "SELECT * FROM Invoice " \
+        query_string = f"SELECT * FROM Invoice {where_clause} " \
         "ORDERBY MetaData.CreateTime " \
         f"STARTPOSITION {start_position} MAXRESULTS 1000"
 
@@ -72,6 +74,7 @@ def _clean_invoices(raw_invoices: list[dict]) -> list[dict]:
             'DocNumber': invoice.get('DocNumber'),
             'TxnDate': invoice.get('TxnDate'),
             'DueDate': invoice.get('DueDate'),
+            'TotalAmt': invoice.get('TotalAmt'),
             'Balance': invoice.get('Balance'),
             'CustomerName': invoice.get('CustomerRef', {}).get('name'),
             'LastUpdatedTime': invoice.get('MetaData', {}).get('LastUpdatedTime')

@@ -1,0 +1,13 @@
+.venv
+.env
+.vscode
+__pycache__
+.pytest_cache
+logs/
+TODO.txt
+token.json
+credentials.json
+threshold_tracker.json
+TODO.md
+Invoice_Report_*.xlsx
+run_*.log

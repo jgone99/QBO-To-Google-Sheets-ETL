@@ -1,10 +1,7 @@
 from intuitlib.client import AuthClient
-from intuitlib.enums import Scopes
-from dotenv import load_dotenv, set_key
+from dotenv import set_key
 import os
-
-# load variables from .env file
-load_dotenv()
+import config
 
 _access_token = None
 
@@ -19,11 +16,11 @@ def get_access_token():
     redirect_uri = os.getenv("QBO_REDIRECT_URI")
     refresh_token = os.getenv("QBO_REFRESH_TOKEN")
 
-    auth_client = AuthClient(client_id, client_secret, redirect_uri, "sandbox")
+    auth_client = AuthClient(client_id, client_secret, redirect_uri, config.QBO_ENVIRONMENT)
     auth_client.refresh(refresh_token=refresh_token)
 
-    # save refresh token every time
-    set_key(".env", "QBO_REFRESH_TOKEN", auth_client.refresh_token)
+    # save refresh token every time (QBO rotates it, so losing it means re-authorizing)
+    set_key(config.ENV_PATH, "QBO_REFRESH_TOKEN", auth_client.refresh_token)
     os.environ["QBO_REFRESH_TOKEN"] = auth_client.refresh_token
 
     _access_token = auth_client.access_token

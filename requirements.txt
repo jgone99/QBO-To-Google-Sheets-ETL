@@ -1,0 +1,6 @@
+google-api-python-client==2.200.0
+google-auth==2.58.1
+intuit-oauth==1.2.7
+python-dotenv==1.2.3
+requests==2.34.2
+urllib3==2.8.0

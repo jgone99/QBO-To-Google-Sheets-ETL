@@ -4,6 +4,7 @@
 __pycache__
 .pytest_cache
 logs/
+backups/
 TODO.txt
 token.json
 credentials.json
@@ -11,3 +12,4 @@ threshold_tracker.json
 TODO.md
 Invoice_Report_*.xlsx
 run_*.log
+commit_msg.txt

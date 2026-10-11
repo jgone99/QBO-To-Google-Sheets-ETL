@@ -9,10 +9,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 ENV_PATH = PROJECT_ROOT / ".env"
 CREDENTIALS_PATH = PROJECT_ROOT / "credentials.json"
 LOGS_DIR = PROJECT_ROOT / "logs"
+BACKUPS_DIR = PROJECT_ROOT / "backups"
 
-# logs are deleted once they are (retention - buffer) days old
+# logs and backups are deleted once they are (retention - buffer) days old
 MAX_LOG_RETENTION_DAYS = 30
 MAX_LOG_RETENTION_BUFFER_DAYS = 1
+MAX_BACKUP_RETENTION_DAYS = MAX_LOG_RETENTION_DAYS
+MAX_BACKUP_RETENTION_BUFFER_DAYS = MAX_LOG_RETENTION_BUFFER_DAYS
 
 load_dotenv(ENV_PATH)
 

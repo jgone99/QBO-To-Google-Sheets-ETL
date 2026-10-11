@@ -6,6 +6,7 @@ if __name__ == "__main__":
 
 from qbo_client.invoices import get_all_invoices_since
 from spreadsheet_client.client import set_spreadsheet_values
+import backup
 import config
 import invoice_sheet
 import status_sheet
@@ -27,6 +28,11 @@ def main(spreadsheet_id: str):
 
     values = invoice_sheet.to_rows(invoices)
     logging.info("Transformed invoices to sheet rows")
+
+    # keep a copy of what's about to be overwritten. If the backup fails this raises,
+    # so the sheet is never overwritten without one
+    backup.backup_sheet(spreadsheet_id, invoice_sheet.SHEET_NAME)
+    backup.cleanup_old_backups()
 
     set_spreadsheet_values(spreadsheet_id, invoice_sheet.SHEET_NAME, values)
 

@@ -32,7 +32,6 @@ def main(spreadsheet_id: str):
     # keep a copy of what's about to be overwritten. If the backup fails this raises,
     # so the sheet is never overwritten without one
     backup.backup_sheet(spreadsheet_id, invoice_sheet.SHEET_NAME)
-    backup.cleanup_old_backups()
 
     set_spreadsheet_values(spreadsheet_id, invoice_sheet.SHEET_NAME, values)
 
@@ -40,6 +39,10 @@ def main(spreadsheet_id: str):
     logging.info("Run finished")
 
 if __name__ == "__main__":
+    # runs every time, alongside the log cleanup in setup_logging, so backups keep to the
+    # retention limit even when the sync fails. It logs its own errors and never raises
+    backup.cleanup_old_backups()
+
     spreadsheet_id = os.getenv("SPREADSHEET_ID")
     logging.info(f"Loaded spreadsheet id: {spreadsheet_id}")
 

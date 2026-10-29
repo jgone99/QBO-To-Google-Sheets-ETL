@@ -51,7 +51,6 @@ def test_sheet_is_backed_up_before_it_is_overwritten(pipeline):
     steps = [name for name, _, _ in pipeline.mock_calls if name in ("backup", "write")]
     assert steps == ["backup", "write"]
     pipeline.backup.assert_called_once_with("sheet-id", "Invoices")
-    pipeline.cleanup_backups.assert_called_once()
 
 
 def test_failed_backup_stops_the_overwrite(pipeline):
@@ -126,6 +125,25 @@ def test_script_success(script, pipeline):
 
     logger.setup_logging.assert_called_once()
     pipeline.success.assert_called_once()
+
+
+def test_script_cleans_up_backups_before_the_sync(script, pipeline):
+    assert script() == 0
+
+    steps = [name for name, _, _ in pipeline.mock_calls if name in ("cleanup_backups", "fetch")]
+    assert steps == ["cleanup_backups", "fetch"]
+
+
+@pytest.mark.parametrize("break_run", ["sync", "config"])
+def test_script_cleans_up_backups_even_when_the_run_fails(script, pipeline, break_run):
+    if break_run == "sync":
+        pipeline.fetch.side_effect = RuntimeError("QBO down")
+    else:
+        config.validate.side_effect = ValueError("Invalid configuration")
+
+    assert script() == 1
+
+    pipeline.cleanup_backups.assert_called_once()
 
 
 def test_script_failure_exits_1_and_records_it(script, pipeline, caplog):

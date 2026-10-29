@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  QBO to Google Sheets ETL. Daily Lambda that copies QuickBooks Online invoices into a
+  Google Sheet, backing up the sheet to S3 before each overwrite.
+
+# Values asked for by `sam deploy --guided` and saved in samconfig.toml (not committed).
+# Company-specific values have no defaults so they never end up in the repo
+Parameters:
+  SpreadsheetId:
+    Type: String
+    Description: ID of the Google Sheet, from its URL (docs.google.com/spreadsheets/d/<ID>/edit)
+  AlertEmail:
+    Type: String
+    Description: Receives an alarm email whenever a run errors (including timeouts and crashes)
+  QboEnvironment:
+    Type: String
+    Default: sandbox
+    AllowedValues: [sandbox, production]
+  ScheduleExpression:
+    Type: String
+    Default: cron(0 6 * * ? *)
+    Description: When the daily run happens, in America/New_York time (default 6:00 AM)
+  ScheduleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Leave DISABLED until the test runs are done
+  BackupRetentionDays:
+    Type: Number
+    Default: 30
+    Description: Days a sheet backup is kept in S3 before it is deleted
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+    Description: Days the run logs are kept in CloudWatch Logs
+
+Resources:
+  # QBO client id/secret, redirect URI, realm id and the rotating refresh token, as one JSON
+  # secret. Created with a placeholder; scripts/seed_secrets.py writes the real values.
+  # Retained if the stack is deleted, so the refresh token can't be lost by accident
+  QboSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: qbo-sheets-etl/qbo
+      Description: QBO OAuth credentials and rotating refresh token
+      SecretString: '{"seeded": false}'
+
+  # the Google service account key (the JSON file Google provides), written by scripts/seed_secrets.py
+  GoogleSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: qbo-sheets-etl/google
+      Description: Google service account key used to write the sheet
+      SecretString: '{"seeded": false}'
+
+  # CSV backups of the sheet, taken before each overwrite. Private and encrypted;
+  # the lifecycle rule deletes each backup after the retention period
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldBackups
+            Status: Enabled
+            Prefix: backups/
+            ExpirationInDays: !Ref BackupRetentionDays
+
+  SyncLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /qbo-sheets-etl/sync
+      RetentionInDays: !Ref LogRetentionDays
+
+  SyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Copies QBO invoices into the Google Sheet
+      CodeUri: .aws-sam-stage/
+      Handler: etl.handler
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Timeout: 300
+      MemorySize: 256
+      LoggingConfig:
+        LogGroup: !Ref SyncLogGroup
+      # a failed run is not retried automatically: a retry would refresh the QBO token
+      # again. The next day's run picks up, or rerun by hand after fixing the problem
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Environment:
+        Variables:
+          QBO_SECRET_ID: !Ref QboSecret
+          GOOGLE_SECRET_ID: !Ref GoogleSecret
+          BACKUP_BUCKET: !Ref BackupBucket
+          SPREADSHEET_ID: !Ref SpreadsheetId
+          QBO_ENVIRONMENT: !Ref QboEnvironment
+          TIMEZONE: America/New_York
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            # read the credentials, and save the rotated QBO refresh token
+            - Sid: QboSecret
+              Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:PutSecretValue
+              Resource: !Ref QboSecret
+            - Sid: GoogleSecret
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref GoogleSecret
+            # write-only: the function never needs to read or delete a backup
+            - Sid: Backups
+              Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub "${BackupBucket.Arn}/backups/*"
+      Events:
+        Daily:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: !Ref ScheduleExpression
+            ScheduleExpressionTimezone: America/New_York
+            State: !Ref ScheduleState
+            Input: "{}"
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  SyncErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The QBO to Google Sheets sync failed. Check the Sync Status tab or CloudWatch Logs
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SyncFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+Outputs:
+  SyncFunctionName:
+    Value: !Ref SyncFunction
+  QboSecretArn:
+    Value: !Ref QboSecret
+  GoogleSecretArn:
+    Value: !Ref GoogleSecret
+  BackupBucketName:
+    Value: !Ref BackupBucket
+  SyncLogGroup:
+    Value: !Ref SyncLogGroup

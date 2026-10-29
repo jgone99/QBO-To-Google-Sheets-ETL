@@ -1,2 +1,6 @@
+# local runs and tests
 -r requirements.txt
+# boto3 needs it to use `aws login` credentials (botocore[crt] pins this version)
+awscrt==0.36.0
 pytest==9.1.1
+python-dotenv==1.2.3

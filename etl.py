@@ -1,17 +1,14 @@
-from logger import setup_logging
-if __name__ == "__main__":
-    # set up logging before anything else so even import and config errors are logged.
-    # only when run as a script, so importing this module (e.g. from tests) doesn't write to logs/
-    setup_logging()
-
+from qbo_client import auth as qbo_auth
 from qbo_client.invoices import get_all_invoices_since
+from spreadsheet_client import auth as sheets_auth
 from spreadsheet_client.client import set_spreadsheet_values
+from aws_client.secrets import JsonSecret
+from logger import setup_logging
 import backup
 import config
 import invoice_sheet
 import status_sheet
 import logging
-import os
 import sys
 
 def main(spreadsheet_id: str):
@@ -38,13 +35,18 @@ def main(spreadsheet_id: str):
     status_sheet.record_success(spreadsheet_id, f"{len(invoices)} invoices since {start_date}")
     logging.info("Run finished")
 
-if __name__ == "__main__":
-    # runs every time, alongside the log cleanup in setup_logging, so backups keep to the
-    # retention limit even when the sync fails. It logs its own errors and never raises
-    backup.cleanup_old_backups()
+def handler(event, context):
+    """
+    Lambda entry point, run daily by EventBridge Scheduler.
+    Raises when the run fails, so Lambda counts it as an error and the alarm fires.
+    """
+    setup_logging()
 
-    spreadsheet_id = os.getenv("SPREADSHEET_ID")
-    logging.info(f"Loaded spreadsheet id: {spreadsheet_id}")
+    # Lambda can reuse this process from yesterday's run, so reset the credentials per run
+    qbo_auth.use_store(JsonSecret(config.QBO_SECRET_ID))
+    sheets_auth.use_store(JsonSecret(config.GOOGLE_SECRET_ID))
+
+    spreadsheet_id = config.SPREADSHEET_ID
 
     try:
         config.validate()
@@ -54,4 +56,13 @@ if __name__ == "__main__":
         # without a spreadsheet id there is nowhere to record the failure; the log has it
         if spreadsheet_id:
             status_sheet.record_failure(spreadsheet_id, f"{type(e).__name__}: {e}")
+        raise
+
+    return {"status": "succeeded"}
+
+if __name__ == "__main__":
+    # local run, using the AWS profile from .env for Secrets Manager and S3
+    try:
+        handler({}, None)
+    except Exception:
         sys.exit(1)

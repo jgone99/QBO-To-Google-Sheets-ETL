@@ -1,6 +1,8 @@
-google-api-python-client==2.200.0
+# packaged into the Lambda function. boto3 is bundled even though the Lambda runtime has a copy:
+# AWS recommends it, and bundling urllib3 without a matching boto3 can break the function
+boto3==1.43.118
 google-auth==2.58.1
 intuit-oauth==1.2.7
-python-dotenv==1.2.3
 requests==2.34.2
+tzdata==2026.5
 urllib3==2.8.0

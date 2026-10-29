@@ -1,45 +1,35 @@
+from datetime import datetime, timezone
+
 import pytest
 
 import config
 
 
-@pytest.fixture
-def valid_config(tmp_path, monkeypatch):
-    # a complete config made of fake values, independent of the real .env and credentials
-    for name in config.REQUIRED_ENV_VARS:
-        monkeypatch.setenv(name, f"fake-{name}")
-
-    credentials = tmp_path / "credentials.json"
-    credentials.write_text("{}")
-    monkeypatch.setattr(config, "CREDENTIALS_PATH", credentials)
-    monkeypatch.setattr(config, "QBO_ENVIRONMENT", "sandbox")
-    monkeypatch.setattr(config, "QBO_BASE_URL", config.QBO_BASE_URLS["sandbox"])
-
-
-def test_valid_config_passes(valid_config):
+def test_valid_config_passes():
+    # conftest sets every required setting to a fake value
     config.validate()
 
 
-def test_missing_env_vars_are_named(valid_config, monkeypatch):
+def test_missing_settings_are_named(monkeypatch):
     monkeypatch.delenv("SPREADSHEET_ID")
-    monkeypatch.setenv("QBO_REALM_ID", "")
+    monkeypatch.setenv("BACKUP_BUCKET", "")
 
-    with pytest.raises(ValueError, match="missing from .env: QBO_REALM_ID, SPREADSHEET_ID"):
+    with pytest.raises(ValueError, match="missing settings: BACKUP_BUCKET, SPREADSHEET_ID"):
         config.validate()
 
 
-def test_error_never_contains_secret_values(valid_config, monkeypatch):
-    monkeypatch.delenv("QBO_REALM_ID")
+def test_error_never_contains_setting_values(monkeypatch):
+    monkeypatch.delenv("BACKUP_BUCKET")
     monkeypatch.setattr(config, "QBO_BASE_URL", None)
 
     with pytest.raises(ValueError) as error:
         config.validate()
 
-    assert "fake-QBO_CLIENT_SECRET" not in str(error.value)
-    assert "fake-QBO_REFRESH_TOKEN" not in str(error.value)
+    assert "test-qbo-secret" not in str(error.value)
+    assert "test-sheet" not in str(error.value)
 
 
-def test_invalid_environment(valid_config, monkeypatch):
+def test_invalid_environment(monkeypatch):
     monkeypatch.setattr(config, "QBO_ENVIRONMENT", "prod")
     monkeypatch.setattr(config, "QBO_BASE_URL", None)
 
@@ -47,17 +37,44 @@ def test_invalid_environment(valid_config, monkeypatch):
         config.validate()
 
 
-def test_missing_credentials_file(valid_config, monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "CREDENTIALS_PATH", tmp_path / "missing.json")
+def test_invalid_time_zone(monkeypatch):
+    monkeypatch.setattr(config, "TIMEZONE", "Eastern")
 
-    with pytest.raises(ValueError, match="Google credentials file not found"):
+    with pytest.raises(ValueError, match="TIMEZONE is not a valid time zone: 'Eastern'"):
         config.validate()
 
 
-def test_all_problems_reported_together(valid_config, monkeypatch, tmp_path):
+def test_local_run_needs_a_profile(monkeypatch):
+    # without one, boto3 would fall back to the [default] credentials
+    monkeypatch.delenv("AWS_PROFILE")
+
+    with pytest.raises(ValueError, match="AWS_PROFILE must be set for local runs"):
+        config.validate()
+
+
+def test_local_run_rejects_access_keys_in_the_environment(monkeypatch):
+    # boto3 uses these ahead of AWS_PROFILE
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+
+    with pytest.raises(ValueError, match="AWS_ACCESS_KEY_ID is set") as error:
+        config.validate()
+
+    assert "AKIAEXAMPLE" not in str(error.value)
+
+
+def test_lambda_skips_the_profile_check(monkeypatch):
+    # Lambda gets credentials from the function's role, and sets AWS_ACCESS_KEY_ID itself
+    monkeypatch.setattr(config, "ON_LAMBDA", True)
+    monkeypatch.delenv("AWS_PROFILE")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+
+    config.validate()
+
+
+def test_all_problems_reported_together(monkeypatch):
     monkeypatch.delenv("SPREADSHEET_ID")
     monkeypatch.setattr(config, "QBO_BASE_URL", None)
-    monkeypatch.setattr(config, "CREDENTIALS_PATH", tmp_path / "missing.json")
+    monkeypatch.setattr(config, "TIMEZONE", "Eastern")
 
     with pytest.raises(ValueError) as error:
         config.validate()
@@ -65,7 +82,20 @@ def test_all_problems_reported_together(valid_config, monkeypatch, tmp_path):
     message = str(error.value)
     assert "SPREADSHEET_ID" in message
     assert "QBO_ENVIRONMENT" in message
-    assert "credentials file" in message
+    assert "TIMEZONE" in message
+
+
+def test_now_is_in_the_business_time_zone():
+    local = config.now()
+    utc = datetime.now(timezone.utc)
+
+    assert str(local.tzinfo) == "America/New_York"
+    # same moment, different wall clock
+    assert abs((local - utc).total_seconds()) < 5
+
+
+def test_today_is_the_business_date():
+    assert config.today() == config.now().date()
 
 
 def test_base_urls():

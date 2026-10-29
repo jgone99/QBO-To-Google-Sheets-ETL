@@ -5,6 +5,9 @@ __pycache__
 .pytest_cache
 logs/
 backups/
+.aws-sam/
+.aws-sam-stage/
+samconfig.toml
 TODO.txt
 token.json
 credentials.json

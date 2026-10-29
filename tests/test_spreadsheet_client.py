@@ -1,9 +1,13 @@
 import pytest
 
 from spreadsheet_client import client
+from spreadsheet_client.client import SheetsAPIError
+from tests.conftest import FakeResponse
+
+API = "https://sheets.googleapis.com/v4/spreadsheets"
 
 
-# --- as_text / _range
+# --- as_text / ranges
 
 @pytest.mark.parametrize("value, expected", [
     ("00451", "'00451"),
@@ -24,6 +28,10 @@ def test_range_quotes_sheet_names(sheet_name, expected):
     assert client._range(sheet_name, "A1") == expected
 
 
+def test_ranges_in_the_url_are_encoded():
+    assert client._path_range("Sync Status", "A1:B3") == "%27Sync%20Status%27%21A1%3AB3"
+
+
 def test_column_letters():
     assert client._column_letter(1) == "A"
     assert client._column_letter(26) == "Z"
@@ -33,104 +41,137 @@ def test_column_letters():
 
 # --- set_spreadsheet_values
 
-def written(sheets_service):
-    return sheets_service.values.batchUpdate.call_args.kwargs["body"]
+def calls_to(session, suffix):
+    return [call for call in session.calls if call["url"].endswith(suffix)]
 
 
-def cleared_ranges(sheets_service):
-    return sheets_service.values.batchClear.call_args.kwargs["body"]["ranges"]
-
-
-def test_writes_from_a1_with_user_entered(sheets_service):
+def test_writes_from_a1_with_user_entered(fake_sheets):
     client.set_spreadsheet_values("sheet-id", "Invoices", [["Id"], ["1"]])
 
-    body = written(sheets_service)
-    assert sheets_service.values.batchUpdate.call_args.kwargs["spreadsheetId"] == "sheet-id"
-    assert body["valueInputOption"] == "USER_ENTERED"
-    assert body["data"][0]["range"] == "'Invoices'!A1"
+    [write] = calls_to(fake_sheets, "/values:batchUpdate")
+    assert write["method"] == "POST"
+    assert write["url"] == f"{API}/sheet-id/values:batchUpdate"
+    assert write["json"]["valueInputOption"] == "USER_ENTERED"
+    assert write["json"]["data"][0]["range"] == "'Invoices'!A1"
 
 
-def test_blanks_are_written_so_old_values_are_overwritten(sheets_service):
+def test_blanks_are_written_so_old_values_are_overwritten(fake_sheets):
     # None would make Sheets skip the cell and keep the previous run's value
     client.set_spreadsheet_values("sheet-id", "Invoices", [["Id", "PO"], ["1", None], ["2"]])
 
-    assert written(sheets_service)["data"][0]["values"] == [["Id", "PO"], ["1", ""], ["2", ""]]
+    [write] = calls_to(fake_sheets, "/values:batchUpdate")
+    assert write["json"]["data"][0]["values"] == [["Id", "PO"], ["1", ""], ["2", ""]]
 
 
-def test_clears_rows_below_and_columns_right_of_new_data(sheets_service):
+def test_clears_rows_below_and_columns_right_of_new_data(fake_sheets):
     client.set_spreadsheet_values("sheet-id", "Invoices", [["a", "b"], ["1", "2"], ["3", "4"]])
 
-    assert cleared_ranges(sheets_service) == ["'Invoices'!A4:Z", "'Invoices'!C1:Z3"]
+    [clear] = calls_to(fake_sheets, "/values:batchClear")
+    assert clear["json"] == {"ranges": ["'Invoices'!A4:Z", "'Invoices'!C1:Z3"]}
 
 
-def test_full_width_data_only_clears_rows(sheets_service):
+def test_full_width_data_only_clears_rows(fake_sheets):
     row = [str(i) for i in range(26)]
 
     client.set_spreadsheet_values("sheet-id", "Invoices", [row, row])
 
-    assert cleared_ranges(sheets_service) == ["'Invoices'!A3:Z"]
+    [clear] = calls_to(fake_sheets, "/values:batchClear")
+    assert clear["json"] == {"ranges": ["'Invoices'!A3:Z"]}
 
 
-def test_write_happens_before_clear(sheets_service):
-    order = []
-    sheets_service.values.batchUpdate.side_effect = lambda **kw: order.append("write") or sheets_service.values.batchUpdate.return_value
-    sheets_service.values.batchClear.side_effect = lambda **kw: order.append("clear") or sheets_service.values.batchClear.return_value
-
+def test_write_happens_before_clear(fake_sheets):
     client.set_spreadsheet_values("sheet-id", "Invoices", [["a"]])
 
-    assert order == ["write", "clear"]
+    assert [call["url"].rsplit(":", 1)[-1] for call in fake_sheets.calls] == ["batchUpdate", "batchClear"]
 
 
-def test_failed_write_leaves_sheet_untouched(sheets_service):
-    sheets_service.values.batchUpdate.return_value.execute.side_effect = RuntimeError("quota exceeded")
+def test_failed_write_leaves_sheet_untouched(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(429, {"error": {"message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}})
 
-    with pytest.raises(RuntimeError, match="quota exceeded"):
+    with pytest.raises(SheetsAPIError, match="Quota exceeded"):
         client.set_spreadsheet_values("sheet-id", "Invoices", [["a"]])
 
-    sheets_service.values.batchClear.assert_not_called()
+    assert calls_to(fake_sheets, "/values:batchClear") == []
 
 
-def test_failed_clear_raises(sheets_service):
-    sheets_service.values.batchClear.return_value.execute.side_effect = RuntimeError("network")
+def test_failed_clear_raises(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: (
+        FakeResponse(500, {"error": {"message": "Internal error", "status": "INTERNAL"}})
+        if url.endswith("batchClear") else FakeResponse(200, {})
+    )
 
-    with pytest.raises(RuntimeError, match="network"):
+    with pytest.raises(SheetsAPIError, match="Internal error"):
         client.set_spreadsheet_values("sheet-id", "Invoices", [["a"]])
 
 
-def test_requests_are_retried(sheets_service):
-    client.set_spreadsheet_values("sheet-id", "Invoices", [["a"]])
+# --- other calls
 
-    sheets_service.values.batchUpdate.return_value.execute.assert_called_once_with(num_retries=client.NUM_RETRIES)
-    sheets_service.values.batchClear.return_value.execute.assert_called_once_with(num_retries=client.NUM_RETRIES)
-
-
-# --- update_values / ensure_sheet_exists
-
-def test_update_values_writes_only_given_cells(sheets_service):
+def test_update_values_writes_only_given_cells(fake_sheets):
     client.update_values("sheet-id", "Sync Status", "A2:B3", [["x", "y"]])
 
-    kwargs = sheets_service.values.update.call_args.kwargs
-    assert kwargs["range"] == "'Sync Status'!A2:B3"
-    assert kwargs["body"] == {"values": [["x", "y"]]}
-    sheets_service.values.batchClear.assert_not_called()
+    [call] = fake_sheets.calls
+    assert call["method"] == "PUT"
+    assert call["url"] == f"{API}/sheet-id/values/%27Sync%20Status%27%21A2%3AB3"
+    assert call["params"] == {"valueInputOption": "USER_ENTERED"}
+    assert call["json"] == {"values": [["x", "y"]]}
 
 
-def test_ensure_sheet_exists_does_nothing_when_present(sheets_service):
-    sheets_service.spreadsheets.get.return_value.execute.return_value = {
-        "sheets": [{"properties": {"title": "Invoices"}}, {"properties": {"title": "Sync Status"}}]
-    }
+def test_get_spreadsheet_values(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(200, {"values": [["Id"], ["1"]]})
+
+    result = client.get_spreadsheet_values("sheet-id", "Invoices")
+
+    assert result == {"values": [["Id"], ["1"]]}
+    [call] = fake_sheets.calls
+    assert call["method"] == "GET"
+    assert call["url"] == f"{API}/sheet-id/values/%27Invoices%27%21A%3AZ"
+
+
+def test_ensure_sheet_exists_does_nothing_when_present(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(200, {"sheets": [
+        {"properties": {"title": "Invoices"}}, {"properties": {"title": "Sync Status"}}]})
 
     client.ensure_sheet_exists("sheet-id", "Sync Status")
 
-    sheets_service.spreadsheets.batchUpdate.assert_not_called()
+    [lookup] = fake_sheets.calls
+    assert lookup["method"] == "GET"
+    assert lookup["params"] == {"fields": "sheets.properties.title"}
 
 
-def test_ensure_sheet_exists_creates_missing_sheet(sheets_service):
-    sheets_service.spreadsheets.get.return_value.execute.return_value = {
-        "sheets": [{"properties": {"title": "Invoices"}}]
-    }
+def test_ensure_sheet_exists_creates_missing_sheet(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(200, {"sheets": [{"properties": {"title": "Invoices"}}]})
 
     client.ensure_sheet_exists("sheet-id", "Sync Status")
 
-    body = sheets_service.spreadsheets.batchUpdate.call_args.kwargs["body"]
-    assert body == {"requests": [{"addSheet": {"properties": {"title": "Sync Status"}}}]}
+    [_, create] = fake_sheets.calls
+    assert create["url"] == f"{API}/sheet-id:batchUpdate"
+    assert create["json"] == {"requests": [{"addSheet": {"properties": {"title": "Sync Status"}}}]}
+
+
+# --- request handling
+
+def test_every_request_has_a_timeout(fake_sheets):
+    client.update_values("sheet-id", "Invoices", "A1", [["x"]])
+
+    assert fake_sheets.calls[0]["timeout"] == client.REQUEST_TIMEOUT_SECONDS
+
+
+def test_google_error_message_surfaces(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(400, {"error": {
+        "code": 400, "message": "Unable to parse range: 'Invoices'!A1", "status": "INVALID_ARGUMENT"}})
+
+    with pytest.raises(SheetsAPIError, match=r"Unable to parse range.*INVALID_ARGUMENT, HTTP 400"):
+        client.get_spreadsheet_values("sheet-id", "Invoices")
+
+
+def test_non_json_error(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(502, text="<html>Bad Gateway</html>")
+
+    with pytest.raises(SheetsAPIError, match="HTTP 502"):
+        client.get_spreadsheet_values("sheet-id", "Invoices")
+
+
+def test_empty_success_response(fake_sheets):
+    fake_sheets.respond = lambda method, url, **kw: FakeResponse(200, text="")
+
+    assert client.update_values("sheet-id", "Invoices", "A1", [["x"]]) == {}

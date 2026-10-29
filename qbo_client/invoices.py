@@ -1,7 +1,6 @@
-from qbo_client.auth import get_access_token
+from qbo_client.auth import get_access_token, get_realm_id
 from qbo_client.client import query, QBOAPIError
-import config  # loads .env
-import os
+import config
 from datetime import date
 import logging
 
@@ -22,7 +21,7 @@ PAYMENT_TYPE_LABELS = {
 }
 
 def get_all_invoices_since(date_str: str) -> list[dict]:
-    realm_id = os.getenv("QBO_REALM_ID")
+    realm_id = get_realm_id()
     access_token = get_access_token()
 
     where_clause = f"WHERE TxnDate >= '{date_str}'"
@@ -71,7 +70,7 @@ def _clean_invoices(raw_invoices: list[dict]) -> list[dict]:
             'CustomerName': invoice.get('CustomerRef', {}).get('name'),
             'LastUpdatedTime': invoice.get('MetaData', {}).get('LastUpdatedTime')
         }
-        clean_invoice['DaysUntilDue'] = (date.fromisoformat(clean_invoice['DueDate']) - date.today()).days if clean_invoice['DueDate'] else None
+        clean_invoice['DaysUntilDue'] = (date.fromisoformat(clean_invoice['DueDate']) - config.today()).days if clean_invoice['DueDate'] else None
         clean_invoice['CustomerPO'] = _get_custom_field(invoice, 'Customer PO')
         if config.INCLUDE_PAYMENT_TYPE_COLUMN:
             clean_invoice['PaymentType'] = _payment_type_label(_get_custom_field(invoice, 'Payment Type'), invoice.get('DocNumber'))

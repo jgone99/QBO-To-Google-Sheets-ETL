@@ -76,8 +76,8 @@ def test_payment_type_column_left_out_when_disabled(payment_type_off):
 
 
 def test_days_until_due_counts_from_today(payment_type_off):
-    due = date.today() + timedelta(days=10)
-    overdue = date.today() - timedelta(days=3)
+    due = config.today() + timedelta(days=10)
+    overdue = config.today() - timedelta(days=3)
 
     cleaned = invoices._clean_invoices([
         raw_invoice(DueDate=due.isoformat()),
@@ -196,6 +196,7 @@ def fake_query(monkeypatch):
 
         monkeypatch.setattr(invoices, "query", query)
         monkeypatch.setattr(invoices, "get_access_token", lambda: "token")
+        monkeypatch.setattr(invoices, "get_realm_id", lambda: "realm")
         return calls
 
     return setup
@@ -249,3 +250,12 @@ def test_fetch_more_than_counted_warns(fake_query, payment_type_off, caplog):
 
     assert len(result) == 2
     assert "QBO counted 1" in caplog.text
+
+
+def test_days_until_due_uses_the_business_time_zone(payment_type_off, monkeypatch):
+    # at 9 PM in New York, Lambda's UTC clock already shows the next day
+    monkeypatch.setattr(config, "today", lambda: date(2026, 10, 29))
+
+    [clean] = invoices._clean_invoices([raw_invoice(DueDate="2026-11-08")])
+
+    assert clean["DaysUntilDue"] == 10

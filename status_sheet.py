@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+import config
 from spreadsheet_client.client import ensure_sheet_exists, update_values
 
 # layout of the Sync Status sheet, so anyone looking at the spreadsheet can tell
@@ -35,4 +35,5 @@ def _write(spreadsheet_id: str, cells: str, values: list[list]):
         logging.exception(f"Could not update the {SHEET_NAME} sheet")
 
 def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # in the business time zone: Lambda's clock is UTC
+    return config.now().strftime("%Y-%m-%d %H:%M:%S")

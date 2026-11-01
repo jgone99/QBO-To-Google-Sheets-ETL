@@ -51,7 +51,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/New_York")
 REQUEST_TIMEOUT_SECONDS = 30
 
 # invoices with a TxnDate on or after this date are synced to the sheet
-START_DATE = date(2026, 7, 1)
+START_DATE = date(2026, 10, 9)
 
 # adds a PaymentType column from the invoice's "Payment Type" custom field
 INCLUDE_PAYMENT_TYPE_COLUMN = True

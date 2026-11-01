@@ -1,12 +1,11 @@
-import boto3
-import config
+from aws_client import session
 
 _client = None
 
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("sts", region_name=config.AWS_REGION)
+        _client = session.get_session().client("sts")
     return _client
 
 def get_account_id() -> str:

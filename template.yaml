@@ -20,7 +20,13 @@ Parameters:
   ScheduleExpression:
     Type: String
     Default: cron(0 6 * * ? *)
-    Description: When the daily run happens, in America/New_York time (default 6:00 AM)
+    Description: When the daily run happens, in the TimeZone below (default 6:00 AM)
+  # one setting for both the schedule and the code (DaysUntilDue, Sync Status timestamps,
+  # backup names), so the run time and the dates it writes can't disagree
+  TimeZone:
+    Type: String
+    Default: America/New_York
+    Description: The business's time zone, as an IANA name (e.g. America/Chicago)
   ScheduleState:
     Type: String
     Default: DISABLED
@@ -49,7 +55,10 @@ Resources:
       Description: QBO OAuth credentials and rotating refresh token
       SecretString: '{"seeded": false}'
 
-  # the Google service account key (the JSON file Google provides), written by scripts/seed_secrets.py
+  # how the function signs in to Google, written by scripts/seed_secrets.py: a service account
+  # key, or a workload identity federation config (no Google key; the function's role signs in).
+  # Federation needs no extra AWS permission: Google verifies the role with STS GetCallerIdentity.
+  # The Description says "key" but covers both; it's left as is so an update can't touch the secret
   GoogleSecret:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: Retain
@@ -114,7 +123,7 @@ Resources:
           BACKUP_BUCKET: !Ref BackupBucket
           SPREADSHEET_ID: !Ref SpreadsheetId
           QBO_ENVIRONMENT: !Ref QboEnvironment
-          TIMEZONE: America/New_York
+          TIMEZONE: !Ref TimeZone
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -139,7 +148,7 @@ Resources:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: !Ref ScheduleExpression
-            ScheduleExpressionTimezone: America/New_York
+            ScheduleExpressionTimezone: !Ref TimeZone
             State: !Ref ScheduleState
             Input: "{}"
             RetryPolicy:

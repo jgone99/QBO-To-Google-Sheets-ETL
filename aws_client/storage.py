@@ -1,4 +1,4 @@
-import boto3
+from aws_client import session
 import config
 
 _client = None
@@ -6,7 +6,7 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("s3", region_name=config.AWS_REGION)
+        _client = session.get_session().client("s3")
     return _client
 
 def put_object(key: str, body: bytes, content_type: str):

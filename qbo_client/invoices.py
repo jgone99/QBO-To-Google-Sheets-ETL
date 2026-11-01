@@ -5,19 +5,19 @@ from datetime import date
 import logging
 
 # required for QBO to return custom fields like "Customer PO" on invoices
-INVOICE_QUERY_PARAMS = {'include': 'enhancedAllCustomFields'}
+INVOICE_QUERY_PARAMS = {"include": "enhancedAllCustomFields"}
 
 # custom field "Type" -> key that holds its value
 CUSTOM_FIELD_VALUE_KEYS = {
-    'StringType': 'StringValue',
-    'NumberType': 'NumberValue',
-    'DateType': 'DateValue',
+    "StringType": "StringValue",
+    "NumberType": "NumberValue",
+    "DateType": "DateValue",
 }
 
 # values of the "Payment Type" custom field -> label shown in the sheet
 PAYMENT_TYPE_LABELS = {
-    '1': 'Check',
-    '2': 'CC',
+    "1": "Check",
+    "2": "CC",
 }
 
 def get_all_invoices_since(date_str: str) -> list[dict]:
@@ -26,7 +26,7 @@ def get_all_invoices_since(date_str: str) -> list[dict]:
 
     where_clause = f"WHERE TxnDate >= '{date_str}'"
 
-    invoice_count = query(realm_id, access_token, f"SELECT COUNT(*) FROM Invoice {where_clause}")['QueryResponse']['totalCount']
+    invoice_count = query(realm_id, access_token, f"SELECT COUNT(*) FROM Invoice {where_clause}")["QueryResponse"]["totalCount"]
 
     raw_invoices = []
     start_position = 1
@@ -38,7 +38,7 @@ def get_all_invoices_since(date_str: str) -> list[dict]:
 
         response = query(realm_id, access_token, query_string, INVOICE_QUERY_PARAMS)
 
-        raw_invoices_n = response['QueryResponse'].get('Invoice', [])
+        raw_invoices_n = response["QueryResponse"].get("Invoice", [])
 
         if len(raw_invoices_n) == 0:
             break
@@ -61,30 +61,30 @@ def _clean_invoices(raw_invoices: list[dict]) -> list[dict]:
 
     for invoice in raw_invoices:
         clean_invoice = {
-            'Id': invoice.get('Id'),
-            'DocNumber': invoice.get('DocNumber'),
-            'TxnDate': invoice.get('TxnDate'),
-            'DueDate': invoice.get('DueDate'),
-            'TotalAmt': invoice.get('TotalAmt'),
-            'Balance': invoice.get('Balance'),
-            'CustomerName': invoice.get('CustomerRef', {}).get('name'),
-            'LastUpdatedTime': invoice.get('MetaData', {}).get('LastUpdatedTime')
+            "Id": invoice.get("Id"),
+            "DocNumber": invoice.get("DocNumber"),
+            "TxnDate": invoice.get("TxnDate"),
+            "DueDate": invoice.get("DueDate"),
+            "TotalAmt": invoice.get("TotalAmt"),
+            "Balance": invoice.get("Balance"),
+            "CustomerName": invoice.get("CustomerRef", {}).get("name"),
+            "LastUpdatedTime": invoice.get("MetaData", {}).get("LastUpdatedTime")
         }
-        clean_invoice['DaysUntilDue'] = (date.fromisoformat(clean_invoice['DueDate']) - config.today()).days if clean_invoice['DueDate'] else None
-        clean_invoice['CustomerPO'] = _get_custom_field(invoice, 'Customer PO')
+        clean_invoice["DaysUntilDue"] = (date.fromisoformat(clean_invoice["DueDate"]) - config.today()).days if clean_invoice["DueDate"] else None
+        clean_invoice["CustomerPO"] = _get_custom_field(invoice, "Customer PO")
         if config.INCLUDE_PAYMENT_TYPE_COLUMN:
-            clean_invoice['PaymentType'] = _payment_type_label(_get_custom_field(invoice, 'Payment Type'), invoice.get('DocNumber'))
+            clean_invoice["PaymentType"] = _payment_type_label(_get_custom_field(invoice, "Payment Type"), invoice.get("DocNumber"))
         clean_invoices.append(clean_invoice)
 
     return clean_invoices
 
 def _get_custom_field(invoice: dict, name: str):
     # QBO omits the value key when the field is blank on that invoice
-    for field in invoice.get('CustomField', []):
-        if field.get('Name') != name:
+    for field in invoice.get("CustomField", []):
+        if field.get("Name") != name:
             continue
 
-        field_type = field.get('Type')
+        field_type = field.get("Type")
         value_key = CUSTOM_FIELD_VALUE_KEYS.get(field_type)
 
         if value_key is None:
@@ -96,7 +96,7 @@ def _get_custom_field(invoice: dict, name: str):
 
 def _payment_type_label(value, doc_number: str):
     # Payment Type is a StringType field, so values come back as "1", "2", ...
-    if value is None or value == '':
+    if value is None or value == "":
         return None
 
     if value not in PAYMENT_TYPE_LABELS:

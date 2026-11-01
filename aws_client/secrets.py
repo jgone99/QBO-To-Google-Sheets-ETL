@@ -1,13 +1,12 @@
 import json
-import boto3
-import config
+from aws_client import session
 
 _client = None
 
 def _get_client():
     global _client
     if _client is None:
-        _client = boto3.client("secretsmanager", region_name=config.AWS_REGION)
+        _client = session.get_session().client("secretsmanager")
     return _client
 
 def get_json_secret(secret_id: str) -> dict:

@@ -3,8 +3,8 @@ import logging
 
 import pytest
 
-import aws_client.account
 import aws_client.secrets
+import aws_client.session
 import aws_client.storage
 import config
 import qbo_client.auth
@@ -30,9 +30,8 @@ def no_network(monkeypatch):
     monkeypatch.setattr(qbo_client.auth, "AuthClient", _blocked)
     monkeypatch.setattr(qbo_client.client._session, "get", _blocked)
     monkeypatch.setattr(spreadsheet_client.client, "get_session", _blocked)
-    monkeypatch.setattr(aws_client.secrets, "_get_client", _blocked)
-    monkeypatch.setattr(aws_client.storage, "_get_client", _blocked)
-    monkeypatch.setattr(aws_client.account, "_get_client", _blocked)
+    # every AWS client and credential comes from the one shared session
+    monkeypatch.setattr(aws_client.session, "get_session", _blocked)
 
 
 @pytest.fixture(autouse=True)

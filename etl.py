@@ -2,6 +2,7 @@ from qbo_client import auth as qbo_auth
 from qbo_client.invoices import get_all_invoices_since
 from spreadsheet_client import auth as sheets_auth
 from spreadsheet_client.client import set_spreadsheet_values
+from aws_client.credentials import AwsCredentials
 from aws_client.secrets import JsonSecret
 from logger import setup_logging
 import backup
@@ -44,7 +45,9 @@ def handler(event, context):
 
     # Lambda can reuse this process from yesterday's run, so reset the credentials per run
     qbo_auth.use_store(JsonSecret(config.QBO_SECRET_ID))
-    sheets_auth.use_store(JsonSecret(config.GOOGLE_SECRET_ID))
+    # the Google secret holds a service account key or a federation config; federation
+    # signs in with the AWS credentials (the function's role, or `aws login` locally)
+    sheets_auth.use_store(JsonSecret(config.GOOGLE_SECRET_ID), aws_credentials=AwsCredentials())
 
     spreadsheet_id = config.SPREADSHEET_ID
 
@@ -61,7 +64,7 @@ def handler(event, context):
     return {"status": "succeeded"}
 
 if __name__ == "__main__":
-    # local run, using the AWS profile from .env for Secrets Manager and S3
+    # local run, using the AWS profile from .env for Secrets Manager, S3 and Google federation
     try:
         handler({}, None)
     except Exception:

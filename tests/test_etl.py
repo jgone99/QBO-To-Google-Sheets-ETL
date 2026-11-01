@@ -12,6 +12,7 @@ import etl
 import invoice_sheet
 import logger
 import status_sheet
+from aws_client.credentials import AwsCredentials
 from aws_client.secrets import JsonSecret
 
 ETL_PATH = Path(etl.__file__)
@@ -117,6 +118,8 @@ def test_handler_points_credentials_at_the_secrets(pipeline):
     [sheets_store] = pipeline.sheets_store.call_args.args
     assert isinstance(qbo_store, JsonSecret) and qbo_store.secret_id == "test-qbo-secret"
     assert isinstance(sheets_store, JsonSecret) and sheets_store.secret_id == "test-google-secret"
+    # federation configs sign in with the run's AWS credentials
+    assert isinstance(pipeline.sheets_store.call_args.kwargs["aws_credentials"], AwsCredentials)
 
 
 def test_handler_resets_credentials_before_the_sync(pipeline):

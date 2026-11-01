@@ -1,7 +1,8 @@
 """
 One-time move of the credentials into Secrets Manager:
   - the QBO_* values from .env into the QBO secret, then removed from .env
-  - credentials.json (the Google service account key) into the Google secret
+  - credentials.json into the Google secret: either a service account key, or a workload
+    identity federation config (from `gcloud iam workload-identity-pools create-cred-config --aws`)
 
 Afterwards Secrets Manager holds the only copy of the QBO refresh token: two live copies
 would invalidate each other the next time either one is refreshed. Delete credentials.json
@@ -25,6 +26,7 @@ from dotenv import dotenv_values, unset_key
 from aws_client.account import get_account_id
 from aws_client.secrets import get_json_secret, put_json_secret
 from qbo_client.auth import SECRET_KEYS
+from spreadsheet_client.auth import FEDERATION_CONFIG, SERVICE_ACCOUNT_KEY, check_credentials_info
 import config
 
 CREDENTIALS_PATH = config.PROJECT_ROOT / "credentials.json"
@@ -53,18 +55,24 @@ def seed_google(force: bool):
         print("Google: skipped, credentials.json not found")
         return
 
-    key = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
-    if key.get("type") != "service_account":
-        sys.exit("Google: credentials.json is not a service account key")
+    info = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
+    try:
+        check_credentials_info(info)
+    except ValueError as e:
+        sys.exit(f"Google: credentials.json can't be used: {e}")
 
     current = get_json_secret(config.GOOGLE_SECRET_ID)
-    if current.get("type") == "service_account" and not force:
-        print("Google: skipped, the secret already holds a service account key (use --force to replace it)")
+    if current.get("type") in (SERVICE_ACCOUNT_KEY, FEDERATION_CONFIG) and not force:
+        print("Google: skipped, the secret already holds Google credentials (use --force to replace them)")
         return
 
-    put_json_secret(config.GOOGLE_SECRET_ID, key)
-    print(f"Google: saved the service account key ({key.get('client_email')}) to {config.GOOGLE_SECRET_ID}")
-    print("Google: delete credentials.json once a run has worked")
+    put_json_secret(config.GOOGLE_SECRET_ID, info)
+    if info["type"] == SERVICE_ACCOUNT_KEY:
+        print(f"Google: saved the service account key ({info.get('client_email')}) to {config.GOOGLE_SECRET_ID}")
+        print("Google: delete credentials.json once a run has worked")
+    else:
+        print(f"Google: saved the workload identity federation config to {config.GOOGLE_SECRET_ID}")
+        print("Google: credentials.json holds no secret, but it's no longer needed once a run has worked")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

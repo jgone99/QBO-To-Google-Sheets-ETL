@@ -6,7 +6,7 @@ Copies QuickBooks Online invoices into a Google Sheet every morning, so the shee
 
 Each run (daily at 6:00 AM America/New_York):
 
-1. Reads the QBO and Google credentials from Secrets Manager.
+1. Reads the QBO credentials and the Google sign-in (a service account key or a workload identity federation config) from Secrets Manager.
 2. Fetches every invoice with a `TxnDate` on or after `START_DATE` (`config.py`), page by page, and checks the total against QBO's count. Fewer than counted stops the run, so the sheet is never replaced with partial data.
 3. Cleans each invoice into one row: the standard fields, `DaysUntilDue`, the `Customer PO` custom field and, when `INCLUDE_PAYMENT_TYPE_COLUMN` is on, `PaymentType` (mapped from the "Payment Type" custom field).
 4. Backs up the current "Invoices" tab as a CSV in S3. If the backup fails, the run stops and the sheet is left alone.
@@ -23,9 +23,10 @@ A failed run raises, which counts as a Lambda error and sends an alarm email.
 - **Custom fields are read by their `Type`** (`StringType` → `StringValue`, etc.), with `include=enhancedAllCustomFields` on the query. An unknown type or Payment Type value is logged, not silently dropped.
 - **Zero invoices is a warning, not a failure.** The sheet is left as it is and the status tab says so.
 - **No automatic retries of a failed run.** A retry would refresh the QBO token again; the next day's run picks up, or rerun by hand.
-- **Credentials only in Secrets Manager.** QBO rotates the refresh token; the rotated token is saved before anything else happens, and Secrets Manager is the only copy (two copies would invalidate each other). The Google service account key lives there too, so nothing secret is on disk or in the package.
+- **Credentials only in Secrets Manager.** QBO rotates the refresh token; the rotated token is saved before anything else happens, and Secrets Manager is the only copy (two copies would invalidate each other). The Google sign-in lives there too, so nothing secret is on disk or in the package.
+- **Two ways to sign in to Google**, chosen by which file is seeded (its `type` field): a **service account key** (`service_account`), or **workload identity federation** (`external_account`), where the function's AWS role is exchanged for a short-lived token of the service account, so no Google key exists at all. Federation suits Google Workspace organizations, which block service account key creation by default. Either way the sheet is shared with the service account. Federation signs in with the credentials boto3 uses (the function's role on Lambda, `aws login` locally), and the config's URLs are checked to be Google's before use.
 - **Retention is handled by AWS.** Backups expire through an S3 lifecycle rule and logs through the CloudWatch log group's retention, both 30 days by default (`BackupRetentionDays`, `LogRetentionDays`).
-- **Business time zone.** Lambda's clock is UTC, so `DaysUntilDue`, the status timestamps and the backup names use `TIMEZONE` (America/New_York).
+- **Business time zone.** Lambda's clock is UTC, so `DaysUntilDue`, the status timestamps and the backup names use `TIMEZONE` (America/New_York). The stack's `TimeZone` parameter sets both this and the schedule's time zone, so the run time and the dates it writes always agree.
 - **Direct Sheets REST calls** through google-auth's `AuthorizedSession`, instead of google-api-python-client, which is about 100 MB of discovery documents for other APIs.
 
 ## Code structure
@@ -35,9 +36,12 @@ A failed run raises, which counts as a Lambda error and sends an alarm email.
 | `qbo_client/`: QBO auth, queries, invoices | `aws_client/secrets.py`: Secrets Manager |
 | `spreadsheet_client/`: Sheets auth and calls | `aws_client/storage.py`: S3 backups |
 | `invoice_sheet.py`: the Invoices tab layout | `backup.py`: backs the sheet up to S3 |
-| `status_sheet.py`: the Sync Status tab | `etl.py`: the entry point (`handler`) |
+| `status_sheet.py`: the Sync Status tab | `aws_client/credentials.py`: AWS credentials for Google federation |
+| | `aws_client/session.py`: the one boto3 session every AWS client and credential comes from |
+| | `aws_client/account.py`: the account ID `seed_secrets.py` shows before writing |
+| | `etl.py`: the entry point (`handler`) |
 
-`qbo_client.auth` and `spreadsheet_client.auth` get their credentials through a store the entry point passes in (`use_store(JsonSecret(...))`), so neither package depends on AWS.
+`qbo_client.auth` and `spreadsheet_client.auth` get their credentials through a store the entry point passes in (`use_store(JsonSecret(...))`), and federation gets its AWS credentials the same way (`aws_credentials=AwsCredentials()`), so neither package depends on AWS.
 
 Other files: `config.py` (settings), `logger.py` (logging), `template.yaml` (infrastructure), `scripts/` (packaging and seeding), `tests/`.
 
@@ -48,7 +52,7 @@ Other files: `config.py` (settings), `logger.py` (logging), `template.yaml` (inf
 .venv/Scripts/python.exe -m pytest
 ```
 
-Tests use fakes for QBO, Google, Secrets Manager and S3 and never touch real services.
+Tests use fakes for QBO, Google and AWS and never touch real services.
 
 To run against real AWS: copy `.env.example` to `.env` and fill it in, run `aws login --profile qbo-sheets-etl`, then `.venv/Scripts/python.exe etl.py`. This writes the real sheet and rotates the real QBO token, exactly like a scheduled run.
 
@@ -69,7 +73,27 @@ Steps that need the account owner. Everything else is in the repo. Region us-eas
    ```
    Stack name `qbo-sheets-etl`, region `us-east-2`, keep `ScheduleState=DISABLED`. Afterwards, put the `BackupBucketName` output in `.env` as `BACKUP_BUCKET`.
 3. **Confirm the alarm subscription** email from AWS Notifications.
-4. **Seed the secrets:** `.venv/Scripts/python.exe scripts/seed_secrets.py` (moves `QBO_*` from `.env` and `credentials.json` into Secrets Manager).
+4. **Seed the secrets:** set up Google one of the two ways below and save the result as `credentials.json`, then run `.venv/Scripts/python.exe scripts/seed_secrets.py` (moves `QBO_*` from `.env` and `credentials.json` into Secrets Manager).
+
+   **Option A: service account key.** In Google Cloud, enable the Google Sheets API, create a service account, download a JSON key as `credentials.json`, and share the spreadsheet (Editor) with the service account's email.
+
+   **Option B: workload identity federation (no Google key).** In Cloud Shell, with `PROJECT_ID`, `PROJECT_NUMBER` (the number, not the ID) and `ACCOUNT_ID` (the 12-digit AWS account) filled in, and `ROLE_NAME` the function's role (`aws cloudformation describe-stack-resource --stack-name qbo-sheets-etl --logical-resource-id SyncFunctionRole --profile qbo-sheets-etl`):
+   ```
+   gcloud services enable iam.googleapis.com sts.googleapis.com iamcredentials.googleapis.com sheets.googleapis.com
+   gcloud iam service-accounts create qbo-sheets-etl --display-name="QBO Sheets ETL"
+   gcloud iam workload-identity-pools create aws-pool --location=global --display-name="AWS"
+   gcloud iam workload-identity-pools providers create-aws aws-provider --location=global \
+     --workload-identity-pool=aws-pool --account-id=ACCOUNT_ID \
+     --attribute-mapping="google.subject=assertion.arn,attribute.aws_role=assertion.arn.extract('assumed-role/{role_name}/')" \
+     --attribute-condition="assertion.arn.startsWith('arn:aws:sts::ACCOUNT_ID:assumed-role/')"
+   gcloud iam service-accounts add-iam-policy-binding qbo-sheets-etl@PROJECT_ID.iam.gserviceaccount.com \
+     --role=roles/iam.workloadIdentityUser \
+     --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/aws-pool/attribute.aws_role/ROLE_NAME"
+   gcloud iam workload-identity-pools create-cred-config \
+     projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/aws-pool/providers/aws-provider \
+     --service-account=qbo-sheets-etl@PROJECT_ID.iam.gserviceaccount.com --aws --output-file=credentials.json
+   ```
+   Download `credentials.json` into the project folder (it holds no secret) and share the spreadsheet (Editor) with `qbo-sheets-etl@PROJECT_ID.iam.gserviceaccount.com`. For local runs, repeat the `add-iam-policy-binding` command with the role your `aws login` uses (the role name in `aws sts get-caller-identity --profile qbo-sheets-etl`); skip it to allow only the Lambda. Nothing changes on the AWS side.
 5. **Test locally:** `.venv/Scripts/python.exe etl.py`; check the console output, the Invoices and Sync Status tabs, and the new backup in the S3 bucket.
 6. **Test on Lambda:** Lambda console, the function, Test, event `{}`. Check the same things, plus the CloudWatch log group `/qbo-sheets-etl/sync`.
 7. **Turn on the schedule:** `sam deploy --profile qbo-sheets-etl --parameter-overrides ScheduleState=ENABLED` (other saved parameters are kept).
@@ -82,7 +106,8 @@ Steps that need the account owner. Everything else is in the repo. Region us-eas
 - **Restore the sheet from a backup:** S3 console, the backup bucket, `backups/`, download the CSV. In Google Sheets, File, Import, Upload, "Replace current sheet", and untick "Convert text to numbers, dates, and formulas" so values like `00451` keep their zeros. The next run overwrites it again, so pause the schedule first if needed.
 - **Pause the daily run:** EventBridge Scheduler console, disable the schedule, or `sam deploy --profile qbo-sheets-etl --parameter-overrides ScheduleState=DISABLED`.
 - **QBO says the refresh token is invalid:** re-authorize the app, put the new `QBO_*` values in `.env`, run `seed_secrets.py --force`.
-- **Google returns 403 / permission denied:** the spreadsheet must be shared (Editor) with the service account's `client_email`.
+- **Google returns 403 / permission denied:** the spreadsheet must be shared (Editor) with the service account's email. With federation, also check that the `workloadIdentityUser` binding names the function's current role: if the stack ever replaces `SyncFunctionRole`, its name changes and the binding must be updated.
+- **Switch between a key and federation:** set up the other option (setup step 4), save it as `credentials.json`, run `seed_secrets.py --force`. Only the Google secret changes when `.env` has no `QBO_*` lines.
 - **Undo a bad secret write:** Secrets Manager console, the secret, Versions; the previous value is `AWSPREVIOUS`.
-- **Change a setting** (schedule, retention, QBO environment): `sam deploy --profile qbo-sheets-etl --parameter-overrides Name=value`. `START_DATE`, `TEXT_COLUMNS`, `INCLUDE_PAYMENT_TYPE_COLUMN` and `PAYMENT_TYPE_LABELS` are in the code: change them, then deploy a code change.
+- **Change a setting** (schedule, time zone, retention, QBO environment): `sam deploy --profile qbo-sheets-etl --parameter-overrides Name=value`. `START_DATE`, `TEXT_COLUMNS`, `INCLUDE_PAYMENT_TYPE_COLUMN` and `PAYMENT_TYPE_LABELS` are in the code: change them, then deploy a code change.
 - **Deploy a code change:** run `.venv/Scripts/python.exe -m pytest`, then `scripts/stage_lambda.py`, `sam build`, `sam deploy --profile qbo-sheets-etl`.

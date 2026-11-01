@@ -21,10 +21,10 @@ _session.mount("https://", HTTPAdapter(max_retries=_retry))
 
 def query(realm_id: str, access_token: str, query_string: str, extra_params: dict = None):
     response = _session.get(f"{config.QBO_BASE_URL}/v3/company/{realm_id}/query",
-        params={'query': query_string, **(extra_params or {})},
+        params={"query": query_string, **(extra_params or {})},
         headers={
-        'Authorization': f'Bearer {access_token}',
-        'Accept': 'application/json'
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json"
     },
         timeout=config.REQUEST_TIMEOUT_SECONDS)
 
@@ -46,14 +46,14 @@ def query(realm_id: str, access_token: str, query_string: str, extra_params: dic
 
 def _raise_for_fault(data: dict, status_code: int):
     # QBO uses 'Fault'/'Error' on most errors but lowercase 'fault'/'error' on auth errors
-    fault = data.get('Fault') or data.get('fault')
+    fault = data.get("Fault") or data.get("fault")
     if not fault:
         return
 
-    errors = fault.get('Error') or fault.get('error') or [{}]
+    errors = fault.get("Error") or fault.get("error") or [{}]
     error = errors[0]
-    message = error.get('Message') or error.get('message')
-    detail = error.get('Detail') or error.get('detail')
-    code = error.get('code')
+    message = error.get("Message") or error.get("message")
+    detail = error.get("Detail") or error.get("detail")
+    code = error.get("code")
 
     raise QBOAPIError(f"{message} - {detail} (code {code}, HTTP {status_code})")

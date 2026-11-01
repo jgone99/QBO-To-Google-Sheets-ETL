@@ -35,16 +35,24 @@ def query(realm_id: str, access_token: str, query_string: str, extra_params: dic
 
     # check for a Fault before raise_for_status so QBO's error message isn't lost
     if isinstance(data, dict):
-        _raise_for_fault(data, response.status_code)
+        _raise_for_fault(data, response)
 
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        raise QBOAPIError(f"{e}{_tid_suffix(response)}") from e
 
     if data is None:
-        raise QBOAPIError(f"QBO returned a non-JSON response (HTTP {response.status_code})")
+        raise QBOAPIError(f"QBO returned a non-JSON response (HTTP {response.status_code}{_tid_suffix(response)})")
 
     return data
 
-def _raise_for_fault(data: dict, status_code: int):
+def _tid_suffix(response) -> str:
+    # Intuit support uses the intuit_tid response header to find a request in their logs
+    tid = response.headers.get("intuit_tid")
+    return f", intuit_tid {tid}" if tid else ""
+
+def _raise_for_fault(data: dict, response):
     # QBO uses 'Fault'/'Error' on most errors but lowercase 'fault'/'error' on auth errors
     fault = data.get("Fault") or data.get("fault")
     if not fault:
@@ -56,4 +64,4 @@ def _raise_for_fault(data: dict, status_code: int):
     detail = error.get("Detail") or error.get("detail")
     code = error.get("code")
 
-    raise QBOAPIError(f"{message} - {detail} (code {code}, HTTP {status_code})")
+    raise QBOAPIError(f"{message} - {detail} (code {code}, HTTP {response.status_code}{_tid_suffix(response)})")

@@ -4,6 +4,7 @@
 __pycache__
 .pytest_cache
 logs/
+legal/
 backups/
 .aws-sam/
 .aws-sam-stage/

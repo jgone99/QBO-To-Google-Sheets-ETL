@@ -8,8 +8,8 @@ from qbo_client import client
 from qbo_client.client import QBOAPIError
 
 
-def response(status, body=None, json_error=False):
-    r = mock.Mock(status_code=status)
+def response(status, body=None, json_error=False, tid=None):
+    r = mock.Mock(status_code=status, headers={"intuit_tid": tid} if tid else {})
     if json_error:
         r.json.side_effect = ValueError("not json")
     else:
@@ -76,15 +76,46 @@ def test_fault_in_200_response_raises(fake_get):
 def test_http_error_without_fault(fake_get):
     fake_get(response(503, {"unexpected": True}))
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(QBOAPIError, match="503 Error") as error:
         client.query("realm", "token", "SELECT")
+    assert isinstance(error.value.__cause__, requests.HTTPError)
 
 
 def test_non_json_error_response(fake_get):
     fake_get(response(502, json_error=True))
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(QBOAPIError, match="502 Error"):
         client.query("realm", "token", "SELECT")
+
+
+def test_fault_includes_intuit_tid(fake_get):
+    body = {"Fault": {"Error": [{"Message": "Error parsing query", "Detail": "bad token", "code": "4000"}]}}
+    fake_get(response(400, body, tid="1-abc"))
+
+    with pytest.raises(QBOAPIError, match=r"\(code 4000, HTTP 400, intuit_tid 1-abc\)"):
+        client.query("realm", "token", "SELECT")
+
+
+def test_http_error_includes_intuit_tid(fake_get):
+    fake_get(response(503, {"unexpected": True}, tid="1-abc"))
+
+    with pytest.raises(QBOAPIError, match="503 Error, intuit_tid 1-abc"):
+        client.query("realm", "token", "SELECT")
+
+
+def test_non_json_success_includes_intuit_tid(fake_get):
+    fake_get(response(200, json_error=True, tid="1-abc"))
+
+    with pytest.raises(QBOAPIError, match=r"non-JSON response \(HTTP 200, intuit_tid 1-abc\)"):
+        client.query("realm", "token", "SELECT")
+
+
+def test_missing_intuit_tid_is_left_out(fake_get):
+    fake_get(response(400, {"Fault": {"Error": [{"Message": "Bad"}]}}))
+
+    with pytest.raises(QBOAPIError) as error:
+        client.query("realm", "token", "SELECT")
+    assert "intuit_tid" not in str(error.value)
 
 
 def test_non_json_success_response(fake_get):

@@ -51,7 +51,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/New_York")
 REQUEST_TIMEOUT_SECONDS = 30
 
 # invoices with a TxnDate on or after this date are synced to the sheet
-START_DATE = date(2026, 10, 9)
+START_DATE = date(2026, 6, 1)
 
 # sheet column -> name of the QBO custom field it's read from, in column order. Every
 # column is always written (blank when an invoice has no value), so formulas that use

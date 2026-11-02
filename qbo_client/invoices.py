@@ -4,7 +4,7 @@ import config
 from datetime import date
 import logging
 
-# required for QBO to return custom fields like "Customer PO" on invoices
+# required for QBO to return custom fields (config.CUSTOM_FIELDS) on invoices
 INVOICE_QUERY_PARAMS = {"include": "enhancedAllCustomFields"}
 
 # custom field "Type" -> key that holds its value
@@ -14,7 +14,7 @@ CUSTOM_FIELD_VALUE_KEYS = {
     "DateType": "DateValue",
 }
 
-# values of the "Payment Type" custom field -> label shown in the sheet
+# values of the custom field in the PaymentType column (config.CUSTOM_FIELDS) -> label shown in the sheet
 PAYMENT_TYPE_LABELS = {
     "1": "Check",
     "2": "CC",
@@ -71,12 +71,31 @@ def _clean_invoices(raw_invoices: list[dict]) -> list[dict]:
             "LastUpdatedTime": invoice.get("MetaData", {}).get("LastUpdatedTime")
         }
         clean_invoice["DaysUntilDue"] = (date.fromisoformat(clean_invoice["DueDate"]) - config.today()).days if clean_invoice["DueDate"] else None
-        clean_invoice["CustomerPO"] = _get_custom_field(invoice, "Customer PO")
-        if config.INCLUDE_PAYMENT_TYPE_COLUMN:
-            clean_invoice["PaymentType"] = _payment_type_label(_get_custom_field(invoice, "Payment Type"), invoice.get("DocNumber"))
+        for column, field_name in config.CUSTOM_FIELDS.items():
+            value = _get_custom_field(invoice, field_name)
+            # Payment Type holds codes ("1", "2", ...), shown in the sheet as their labels
+            if column == "PaymentType":
+                value = _payment_type_label(value, invoice.get("DocNumber"))
+            clean_invoice[column] = value
         clean_invoices.append(clean_invoice)
 
+    _warn_missing_custom_fields(raw_invoices)
+
     return clean_invoices
+
+def _warn_missing_custom_fields(raw_invoices: list[dict]):
+    # a field left blank on some invoices is normal, but one on no invoice at all usually
+    # means its name in config doesn't match QBO. Only field names are logged, never values
+    if not raw_invoices:
+        return
+
+    found = {field.get("Name") for invoice in raw_invoices for field in invoice.get("CustomField", [])}
+    found.discard(None)
+
+    for column, field_name in config.CUSTOM_FIELDS.items():
+        if field_name not in found:
+            logging.warning(f"Custom field '{field_name}' (column {column}) was not found on any invoice. "
+                            f"Custom fields returned: {', '.join(sorted(found)) or 'none'}")
 
 def _get_custom_field(invoice: dict, name: str):
     # QBO omits the value key when the field is blank on that invoice

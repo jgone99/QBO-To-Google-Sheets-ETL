@@ -3,7 +3,7 @@ from spreadsheet_client.client import as_text
 
 # layout of the Invoices sheet. Columns come from the keys of the cleaned invoice
 # objects (qbo_client.invoices._clean_invoices), in that order, so adding or removing
-# a field there adds or removes the column here automatically
+# a field there, or a custom field in config.CUSTOM_FIELDS, adds or removes the column here automatically
 
 SHEET_NAME = "Invoices"
 

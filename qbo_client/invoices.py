@@ -62,7 +62,7 @@ def _clean_invoices(raw_invoices: list[dict]) -> list[dict]:
     for invoice in raw_invoices:
         clean_invoice = {
             "Id": invoice.get("Id"),
-            "DocNumber": invoice.get("DocNumber"),
+            "InvoiceNumber": invoice.get("DocNumber"),
             "TxnDate": invoice.get("TxnDate"),
             "DueDate": invoice.get("DueDate"),
             "TotalAmt": invoice.get("TotalAmt"),

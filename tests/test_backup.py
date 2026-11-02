@@ -38,7 +38,7 @@ def stored_rows(fake_s3, key):
 
 
 def test_backup_saves_current_sheet_to_s3(sheet_contents, fake_s3):
-    rows = [["Id", "DocNumber", "TotalAmt"], ["1", "1001", "$250.00"], ["2", "1002", "$20.00"]]
+    rows = [["Id", "InvoiceNumber", "TotalAmt"], ["1", "1001", "$250.00"], ["2", "1002", "$20.00"]]
     get = sheet_contents(rows)
 
     key = backup.backup_sheet("sheet-id", "Invoices")

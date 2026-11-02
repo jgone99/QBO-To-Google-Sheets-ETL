@@ -8,7 +8,7 @@ from spreadsheet_client.client import as_text
 SHEET_NAME = "Invoices"
 
 # columns stored as plain text instead of letting Sheets convert them (e.g. "00451" -> 451)
-TEXT_COLUMNS = {"CustomerPO", "DocNumber", "CustomerName"}
+TEXT_COLUMNS = {"CustomerPO", "InvoiceNumber", "CustomerName"}
 
 def to_rows(invoices: list[dict]) -> list[list]:
     """

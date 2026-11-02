@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import pytest
 
 import config
+import invoice_sheet
 from qbo_client import invoices
 from qbo_client.client import QBOAPIError
 
@@ -48,7 +49,7 @@ def test_clean_invoice_fields():
     [clean] = invoices._clean_invoices([raw_invoice()])
 
     assert clean["Id"] == "101"
-    assert clean["DocNumber"] == "1001"
+    assert clean["InvoiceNumber"] == "1001"
     assert clean["TxnDate"] == "2026-07-15"
     assert clean["DueDate"] == "2026-08-14"
     assert clean["TotalAmt"] == 250.0
@@ -64,9 +65,17 @@ def test_clean_invoice_column_order():
     [clean] = invoices._clean_invoices([raw_invoice()])
 
     assert list(clean) == [
-        "Id", "DocNumber", "TxnDate", "DueDate", "TotalAmt", "Balance",
+        "Id", "InvoiceNumber", "TxnDate", "DueDate", "TotalAmt", "Balance",
         "CustomerName", "LastUpdatedTime", "DaysUntilDue", "CustomerPO", "PaymentType",
     ]
+
+
+def test_text_columns_are_invoice_columns():
+    # renaming a column without updating TEXT_COLUMNS would only log a warning and let
+    # Sheets turn values like "00451" into numbers
+    [clean] = invoices._clean_invoices([raw_invoice()])
+
+    assert invoice_sheet.TEXT_COLUMNS <= set(clean)
 
 
 def test_payment_type_column_left_out_when_not_configured(payment_type_off):

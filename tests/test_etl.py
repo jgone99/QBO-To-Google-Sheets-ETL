@@ -25,7 +25,7 @@ def pipeline(monkeypatch):
     one mock, so `pipeline.mock_calls` records the order of calls across them.
     """
     fakes = mock.Mock()
-    fakes.fetch.return_value = [{"Id": "1", "DocNumber": "1001"}, {"Id": "2", "DocNumber": "1002"}]
+    fakes.fetch.return_value = [{"Id": "1", "InvoiceNumber": "1001"}, {"Id": "2", "InvoiceNumber": "1002"}]
     monkeypatch.setattr(etl, "get_all_invoices_since", fakes.fetch)
     monkeypatch.setattr(etl, "set_spreadsheet_values", fakes.write)
     monkeypatch.setattr(etl, "setup_logging", fakes.setup_logging)

@@ -56,11 +56,10 @@ START_DATE = date(2026, 6, 1)
 # sheet column -> name of the QBO custom field it's read from, in column order. Every
 # column is always written (blank when an invoice has no value), so formulas that use
 # column letters don't shift; add new ones at the end. Only the right-hand side changes
-# when a field is named differently in QBO. The PaymentType column's values are mapped
-# to labels (qbo_client.invoices.PAYMENT_TYPE_LABELS); remove it to leave the column out
+# when a field is named differently in QBO. Only fields shared with the customer belong
+# here; information the business adds for its own calculations lives in the sheet
 CUSTOM_FIELDS = {
     "CustomerPO": "P.O. Number",
-    "PaymentType": "Payment Type",
 }
 
 def now() -> datetime:

@@ -26,7 +26,7 @@ def raw_invoice(**overrides):
         "Balance": 100.0,
         "CustomerRef": {"value": "5", "name": "Acme Co"},
         "MetaData": {"CreateTime": "2026-07-15T09:00:00-07:00", "LastUpdatedTime": "2026-07-16T10:00:00-07:00"},
-        "CustomField": [custom_field("Customer PO", "00451"), custom_field("Payment Type", "1", definition_id="2")],
+        "CustomField": [custom_field("Customer PO", "00451"), custom_field("Sales Rep", "Jo", definition_id="2")],
     }
     invoice.update(overrides)
     return invoice
@@ -35,11 +35,6 @@ def raw_invoice(**overrides):
 @pytest.fixture(autouse=True)
 def custom_field_names(monkeypatch):
     # the tests use their own field names, independent of the business's QBO setup
-    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO", "PaymentType": "Payment Type"})
-
-
-@pytest.fixture
-def payment_type_off(monkeypatch):
     monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO"})
 
 
@@ -57,7 +52,6 @@ def test_clean_invoice_fields():
     assert clean["CustomerName"] == "Acme Co"
     assert clean["LastUpdatedTime"] == "2026-07-16T10:00:00-07:00"
     assert clean["CustomerPO"] == "00451"
-    assert clean["PaymentType"] == "Check"
 
 
 def test_clean_invoice_column_order():
@@ -66,8 +60,16 @@ def test_clean_invoice_column_order():
 
     assert list(clean) == [
         "Id", "InvoiceNumber", "TxnDate", "DueDate", "TotalAmt", "Balance",
-        "CustomerName", "LastUpdatedTime", "DaysUntilDue", "CustomerPO", "PaymentType",
+        "CustomerName", "LastUpdatedTime", "DaysUntilDue", "CustomerPO",
     ]
+
+
+def test_unconfigured_custom_fields_are_left_out():
+    # QBO returns every custom field, but only the configured ones become columns
+    [clean] = invoices._clean_invoices([raw_invoice()])
+
+    assert "SalesRep" not in clean
+    assert "Jo" not in clean.values()
 
 
 def test_text_columns_are_invoice_columns():
@@ -78,14 +80,7 @@ def test_text_columns_are_invoice_columns():
     assert invoice_sheet.TEXT_COLUMNS <= set(clean)
 
 
-def test_payment_type_column_left_out_when_not_configured(payment_type_off):
-    [clean] = invoices._clean_invoices([raw_invoice()])
-
-    assert "PaymentType" not in clean
-    assert list(clean)[-1] == "CustomerPO"
-
-
-def test_days_until_due_counts_from_today(payment_type_off):
+def test_days_until_due_counts_from_today():
     due = config.today() + timedelta(days=10)
     overdue = config.today() - timedelta(days=3)
 
@@ -108,7 +103,6 @@ def test_missing_optional_fields_become_none():
     assert clean["CustomerName"] is None
     assert clean["LastUpdatedTime"] is None
     assert clean["CustomerPO"] is None
-    assert clean["PaymentType"] is None
 
 
 def test_clean_empty_list():
@@ -117,7 +111,7 @@ def test_clean_empty_list():
 
 # --- config.CUSTOM_FIELDS
 
-def test_custom_field_read_by_its_configured_name(monkeypatch, payment_type_off):
+def test_custom_field_read_by_its_configured_name(monkeypatch):
     monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "P.O. Number"})
 
     [clean] = invoices._clean_invoices([raw_invoice(CustomField=[custom_field("P.O. Number", "00451")])])
@@ -126,31 +120,22 @@ def test_custom_field_read_by_its_configured_name(monkeypatch, payment_type_off)
 
 
 def test_custom_field_columns_follow_config_order(monkeypatch):
-    monkeypatch.setattr(config, "CUSTOM_FIELDS",
-                        {"CustomerPO": "Customer PO", "SalesRep": "Sales Rep", "PaymentType": "Payment Type"})
+    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"SalesRep": "Sales Rep", "CustomerPO": "Customer PO"})
 
     [clean] = invoices._clean_invoices([raw_invoice()])
 
-    assert list(clean)[-3:] == ["CustomerPO", "SalesRep", "PaymentType"]
+    assert list(clean)[-2:] == ["SalesRep", "CustomerPO"]
+    assert clean["SalesRep"] == "Jo"
 
 
-def test_payment_type_labels_follow_its_column_not_its_field_name(monkeypatch):
-    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"PaymentType": "Pay Method"})
-
-    [clean] = invoices._clean_invoices([raw_invoice(CustomField=[custom_field("Pay Method", "2")])])
-
-    assert clean["PaymentType"] == "CC"
-
-
-def test_other_columns_are_not_mapped_to_payment_labels(monkeypatch):
-    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO"})
-
+def test_custom_field_values_are_copied_as_is():
+    # codes like "1" are not translated into labels: that's for the sheet to do
     [clean] = invoices._clean_invoices([raw_invoice(CustomField=[custom_field("Customer PO", "1")])])
 
     assert clean["CustomerPO"] == "1"
 
 
-def test_custom_field_columns_on_every_row(monkeypatch, payment_type_off):
+def test_custom_field_columns_on_every_row(monkeypatch):
     # a column that only some invoices had would shift the sheet's other columns
     monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO", "SalesRep": "Sales Rep"})
 
@@ -169,7 +154,7 @@ def test_custom_field_columns_on_every_row(monkeypatch, payment_type_off):
 def test_missing_custom_field_warns_once_with_names_only(monkeypatch, caplog):
     monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "P.O. Number"})
     raw = [raw_invoice(Id=str(i), CustomField=[custom_field("Customer PO", "SECRET-PO"),
-                                                custom_field("Payment Type", "1", definition_id="2")])
+                                                custom_field("Sales Rep", "Jo", definition_id="2")])
            for i in range(3)]
 
     with caplog.at_level(logging.WARNING):
@@ -177,7 +162,7 @@ def test_missing_custom_field_warns_once_with_names_only(monkeypatch, caplog):
 
     warnings = [r.getMessage() for r in caplog.records if "was not found" in r.getMessage()]
     assert warnings == ["Custom field 'P.O. Number' (column CustomerPO) was not found on any invoice. "
-                        "Custom fields returned: Customer PO, Payment Type"]
+                        "Custom fields returned: Customer PO, Sales Rep"]
     assert "SECRET-PO" not in caplog.text
     assert "1001" not in caplog.text
 
@@ -191,7 +176,7 @@ def test_field_blank_on_some_invoices_does_not_warn(caplog):
     assert "was not found" not in caplog.text
 
 
-def test_field_present_without_values_does_not_warn(payment_type_off, caplog):
+def test_field_present_without_values_does_not_warn(caplog):
     # QBO leaves out the value, not the field, when it's blank on an invoice
     raw = [raw_invoice(CustomField=[custom_field("Customer PO")])]
 
@@ -201,21 +186,20 @@ def test_field_present_without_values_does_not_warn(payment_type_off, caplog):
     assert "was not found" not in caplog.text
 
 
-def test_missing_payment_type_field_warns_only_when_configured(monkeypatch, caplog):
+def test_missing_field_warns_only_when_configured(monkeypatch, caplog):
     raw = [raw_invoice(CustomField=[custom_field("Customer PO", "00451")])]
 
-    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO"})
     with caplog.at_level(logging.WARNING):
         invoices._clean_invoices(raw)
     assert "was not found" not in caplog.text
 
-    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO", "PaymentType": "Payment Type"})
+    monkeypatch.setattr(config, "CUSTOM_FIELDS", {"CustomerPO": "Customer PO", "SalesRep": "Sales Rep"})
     with caplog.at_level(logging.WARNING):
         invoices._clean_invoices(raw)
-    assert "Custom field 'Payment Type' (column PaymentType) was not found" in caplog.text
+    assert "Custom field 'Sales Rep' (column SalesRep) was not found" in caplog.text
 
 
-def test_no_custom_fields_returned_at_all(payment_type_off, caplog):
+def test_no_custom_fields_returned_at_all(caplog):
     with caplog.at_level(logging.WARNING):
         invoices._clean_invoices([{"Id": "7"}])
 
@@ -253,9 +237,9 @@ def test_custom_field_falsy_values_are_kept():
 
 
 def test_custom_field_picks_the_named_field():
-    invoice = {"CustomField": [custom_field("Customer PO", "PO-1"), custom_field("Payment Type", "2", definition_id="2")]}
+    invoice = {"CustomField": [custom_field("Customer PO", "PO-1"), custom_field("Sales Rep", "Jo", definition_id="2")]}
 
-    assert invoices._get_custom_field(invoice, "Payment Type") == "2"
+    assert invoices._get_custom_field(invoice, "Sales Rep") == "Jo"
 
 
 def test_custom_field_blank_on_invoice():
@@ -270,32 +254,13 @@ def test_custom_field_not_on_invoice():
 
 
 def test_custom_field_unsupported_type_warns(caplog):
-    invoice = {"DocNumber": "1001", "CustomField": [custom_field("Payment Type", type_="DropDownType")]}
+    invoice = {"DocNumber": "1001", "CustomField": [custom_field("Sales Rep", type_="DropDownType")]}
 
     with caplog.at_level(logging.WARNING):
-        assert invoices._get_custom_field(invoice, "Payment Type") is None
+        assert invoices._get_custom_field(invoice, "Sales Rep") is None
 
     assert "Unsupported type 'DropDownType'" in caplog.text
     assert "1001" in caplog.text
-
-
-# --- _payment_type_label
-
-@pytest.mark.parametrize("value, label", [("1", "Check"), ("2", "CC")])
-def test_payment_type_label(value, label):
-    assert invoices._payment_type_label(value, "1001") == label
-
-
-@pytest.mark.parametrize("value", [None, ""])
-def test_payment_type_blank(value):
-    assert invoices._payment_type_label(value, "1001") is None
-
-
-def test_payment_type_unknown_kept_and_warned(caplog):
-    with caplog.at_level(logging.WARNING):
-        assert invoices._payment_type_label("9", "1001") == "9"
-
-    assert "Unknown Payment Type '9' on invoice 1001" in caplog.text
 
 
 # --- get_all_invoices_since
@@ -326,7 +291,7 @@ def fake_query(monkeypatch):
     return setup
 
 
-def test_fetch_pages_until_empty(fake_query, payment_type_off):
+def test_fetch_pages_until_empty(fake_query):
     page_1 = [raw_invoice(Id=str(i)) for i in range(1000)]
     page_2 = [raw_invoice(Id=str(i)) for i in range(1000, 1005)]
     calls = fake_query(1005, [page_1, page_2, []])
@@ -341,7 +306,7 @@ def test_fetch_pages_until_empty(fake_query, payment_type_off):
     assert "STARTPOSITION 1006 " in page_queries[2]
 
 
-def test_fetch_filters_by_date_and_requests_custom_fields(fake_query, payment_type_off):
+def test_fetch_filters_by_date_and_requests_custom_fields(fake_query):
     calls = fake_query(1, [[raw_invoice()], []])
 
     invoices.get_all_invoices_since("2026-07-01")
@@ -366,7 +331,7 @@ def test_fetch_fewer_than_counted_raises(fake_query):
         invoices.get_all_invoices_since("2026-07-01")
 
 
-def test_fetch_more_than_counted_warns(fake_query, payment_type_off, caplog):
+def test_fetch_more_than_counted_warns(fake_query, caplog):
     fake_query(1, [[raw_invoice(Id="1"), raw_invoice(Id="2")], []])
 
     with caplog.at_level(logging.WARNING):
@@ -376,7 +341,7 @@ def test_fetch_more_than_counted_warns(fake_query, payment_type_off, caplog):
     assert "QBO counted 1" in caplog.text
 
 
-def test_days_until_due_uses_the_business_time_zone(payment_type_off, monkeypatch):
+def test_days_until_due_uses_the_business_time_zone(monkeypatch):
     # at 9 PM in New York, Lambda's UTC clock already shows the next day
     monkeypatch.setattr(config, "today", lambda: date(2026, 10, 29))
 

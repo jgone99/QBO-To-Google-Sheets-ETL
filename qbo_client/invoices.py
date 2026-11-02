@@ -14,12 +14,6 @@ CUSTOM_FIELD_VALUE_KEYS = {
     "DateType": "DateValue",
 }
 
-# values of the custom field in the PaymentType column (config.CUSTOM_FIELDS) -> label shown in the sheet
-PAYMENT_TYPE_LABELS = {
-    "1": "Check",
-    "2": "CC",
-}
-
 def get_all_invoices_since(date_str: str) -> list[dict]:
     realm_id = get_realm_id()
     access_token = get_access_token()
@@ -72,11 +66,7 @@ def _clean_invoices(raw_invoices: list[dict]) -> list[dict]:
         }
         clean_invoice["DaysUntilDue"] = (date.fromisoformat(clean_invoice["DueDate"]) - config.today()).days if clean_invoice["DueDate"] else None
         for column, field_name in config.CUSTOM_FIELDS.items():
-            value = _get_custom_field(invoice, field_name)
-            # Payment Type holds codes ("1", "2", ...), shown in the sheet as their labels
-            if column == "PaymentType":
-                value = _payment_type_label(value, invoice.get("DocNumber"))
-            clean_invoice[column] = value
+            clean_invoice[column] = _get_custom_field(invoice, field_name)
         clean_invoices.append(clean_invoice)
 
     _warn_missing_custom_fields(raw_invoices)
@@ -112,15 +102,3 @@ def _get_custom_field(invoice: dict, name: str):
 
         return field.get(value_key)
     return None
-
-def _payment_type_label(value, doc_number: str):
-    # Payment Type is a StringType field, so values come back as "1", "2", ...
-    if value is None or value == "":
-        return None
-
-    if value not in PAYMENT_TYPE_LABELS:
-        # keep the raw value so it still shows up in the sheet and can be added to the mapping
-        logging.warning(f"Unknown Payment Type '{value}' on invoice {doc_number}")
-        return value
-
-    return PAYMENT_TYPE_LABELS[value]

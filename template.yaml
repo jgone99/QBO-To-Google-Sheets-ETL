@@ -41,6 +41,15 @@ Parameters:
     Default: 30
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
     Description: Days the run logs are kept in CloudWatch Logs
+  # the sheet's "Sync now" button. Leave either empty to refuse every button request
+  GoogleScriptClientId:
+    Type: String
+    Default: ""
+    Description: OAuth client ID of the sheet's Apps Script (the "aud" of its identity tokens)
+  AllowedSyncEmails:
+    Type: String
+    Default: ""
+    Description: Google accounts allowed to start a sync from the sheet, comma separated
 
 Resources:
   # QBO client id/secret, redirect URI, realm id and the rotating refresh token, as one JSON
@@ -110,12 +119,22 @@ Resources:
       Architectures: [x86_64]
       Timeout: 300
       MemorySize: 256
+      # one run at a time, whatever starts it. A scheduled or background run that arrives
+      # during another is queued by Lambda and retried until it fits (throttles aren't
+      # function errors, so MaximumRetryAttempts doesn't apply); a button press during a
+      # run is refused with HTTP 429, which the sheet shows as "already running"
+      ReservedConcurrentExecutions: 1
       LoggingConfig:
         LogGroup: !Ref SyncLogGroup
       # a failed run is not retried automatically: a retry would refresh the QBO token
-      # again. The next day's run picks up, or rerun by hand after fixing the problem
+      # again. The next day's run picks up, or rerun by hand after fixing the problem.
+      # This also covers the background runs the "Sync now" button starts
       EventInvokeConfig:
         MaximumRetryAttempts: 0
+      # public URL for the "Sync now" button. AWS sign-in isn't possible from the sheet, so
+      # the code checks the caller's Google identity token instead (sync_request.py)
+      FunctionUrlConfig:
+        AuthType: NONE
       Environment:
         Variables:
           QBO_SECRET_ID: !Ref QboSecret
@@ -124,6 +143,8 @@ Resources:
           SPREADSHEET_ID: !Ref SpreadsheetId
           QBO_ENVIRONMENT: !Ref QboEnvironment
           TIMEZONE: !Ref TimeZone
+          GOOGLE_SCRIPT_CLIENT_ID: !Ref GoogleScriptClientId
+          ALLOWED_SYNC_EMAILS: !Ref AllowedSyncEmails
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -143,6 +164,12 @@ Resources:
               Effect: Allow
               Action: s3:PutObject
               Resource: !Sub "${BackupBucket.Arn}/backups/*"
+            # a "Sync now" request starts the sync as a background run of this same function.
+            # Named by pattern because referring to the function's own ARN here would be circular
+            - Sid: StartBackgroundRun
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-SyncFunction-*"
       Events:
         Daily:
           Type: ScheduleV2
@@ -181,6 +208,9 @@ Resources:
 Outputs:
   SyncFunctionName:
     Value: !Ref SyncFunction
+  # goes in the Apps Script's SYNC_URL script property
+  SyncUrl:
+    Value: !GetAtt SyncFunctionUrl.FunctionUrl
   QboSecretArn:
     Value: !Ref QboSecret
   GoogleSecretArn:

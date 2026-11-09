@@ -48,6 +48,12 @@ REQUIRED_ENV_VARS = [
 # timestamps (Sync Status, backup names) are always worked out in this zone
 TIMEZONE = os.getenv("TIMEZONE", "America/New_York")
 
+# the "Sync now" button in the sheet: the Apps Script's OAuth client ID (the "aud" of the
+# Google identity tokens it sends) and the Google accounts allowed to start a sync, comma
+# separated. A request is refused unless both are set
+GOOGLE_SCRIPT_CLIENT_ID = os.getenv("GOOGLE_SCRIPT_CLIENT_ID")
+ALLOWED_SYNC_EMAILS = {email.strip().lower() for email in os.getenv("ALLOWED_SYNC_EMAILS", "").split(",") if email.strip()}
+
 REQUEST_TIMEOUT_SECONDS = 30
 
 # invoices with a TxnDate on or after this date are synced to the sheet

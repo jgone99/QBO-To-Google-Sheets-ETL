@@ -4,7 +4,7 @@ Copies QuickBooks Online invoices into a Google Sheet every morning, so the shee
 
 ## How it works
 
-Each run (daily at 6:00 AM America/New_York):
+A run starts daily at 6:00 AM America/New_York, or whenever someone picks **Sync → Sync now** in the sheet. Each run:
 
 1. Reads the QBO credentials and the Google sign-in (a service account key or a workload identity federation config) from Secrets Manager.
 2. Fetches every invoice with a `TxnDate` on or after `START_DATE` (`config.py`), page by page, and checks the total against QBO's count. Fewer than counted stops the run, so the sheet is never replaced with partial data.
@@ -25,6 +25,9 @@ A failed run raises, which counts as a Lambda error and sends an alarm email.
 - **Custom field names are settings.** `CUSTOM_FIELDS` maps each sheet column to the QBO custom field it's read from, because the same field can be named differently in another QBO company. The column names stay fixed, and every column is on every row (blank when an invoice has no value), so formulas don't shift. Values are copied as they are, with no translation. If a configured field is on no invoice in a run, one warning lists the custom field names QBO did return (names only, never values), which usually shows the right name.
 - **Zero invoices is a warning, not a failure.** The sheet is left as it is and the status tab says so.
 - **QBO errors carry Intuit's request ID.** A failed QBO call's error includes the `intuit_tid` response header (token refresh errors from Intuit's OAuth library already do), so it shows in the Sync Status tab and the logs and can be quoted to Intuit support.
+- **"Sync now" signs in with Google, not a stored secret.** The sheet's Apps Script (`apps_script/`) sends a Google identity token for whoever clicked to the function's URL. `sync_request.py` checks Google's signature, the issuer, the expiry, that the token was issued to the sheet's script (`GoogleScriptClientId`), and that the account is in `AllowedSyncEmails`, so nothing secret is stored in Google or AWS and a Google token meant for any other app is refused. The URL is public but every unchecked request is refused before anything else happens. A refusal is an HTTP answer, not a function error, so it doesn't fire the alarm.
+- **The button doesn't wait for the sync.** After the checks, the function starts the sync as a background (asynchronous) run of itself and answers `202` at once; the result shows in the Sync Status tab a few seconds later. That run is an ordinary sync, with the same no-retry setting.
+- **One run at a time.** The function's reserved concurrency is 1, so a scheduled run, a button press and its background run can never overlap (two runs would both refresh the QBO token and both write the sheet). A scheduled or background run that arrives during another waits in Lambda's queue and starts once it's free; a button press during a run gets HTTP 429, shown in the sheet as "A sync is already running".
 - **No automatic retries of a failed run.** A retry would refresh the QBO token again; the next day's run picks up, or rerun by hand.
 - **Credentials only in Secrets Manager.** QBO rotates the refresh token; the rotated token is saved before anything else happens, and Secrets Manager is the only copy (two copies would invalidate each other). The Google sign-in lives there too, so nothing secret is on disk or in the package.
 - **Two ways to sign in to Google**, chosen by which file is seeded (its `type` field): a **service account key** (`service_account`), or **workload identity federation** (`external_account`), where the function's AWS role is exchanged for a short-lived token of the service account, so no Google key exists at all. Federation suits Google Workspace organizations, which block service account key creation by default. Either way the sheet is shared with the service account. Federation signs in with the credentials boto3 uses (the function's role on Lambda, `aws login` locally), and the config's URLs are checked to be Google's before use.
@@ -40,13 +43,14 @@ A failed run raises, which counts as a Lambda error and sends an alarm email.
 | `spreadsheet_client/`: Sheets auth and calls | `aws_client/storage.py`: S3 backups |
 | `invoice_sheet.py`: the Invoices tab layout | `backup.py`: backs the sheet up to S3 |
 | `status_sheet.py`: the Sync Status tab | `aws_client/credentials.py`: AWS credentials for Google federation |
+| `sync_request.py`: checks "Sync now" requests | `aws_client/functions.py`: starts the background run |
 | | `aws_client/session.py`: the one boto3 session every AWS client and credential comes from |
 | | `aws_client/account.py`: the account ID `seed_secrets.py` shows before writing |
 | | `etl.py`: the entry point (`handler`) |
 
 `qbo_client.auth` and `spreadsheet_client.auth` get their credentials through a store the entry point passes in (`use_store(JsonSecret(...))`), and federation gets its AWS credentials the same way (`aws_credentials=AwsCredentials()`), so neither package depends on AWS.
 
-Other files: `config.py` (settings), `logger.py` (logging), `template.yaml` (infrastructure), `scripts/` (packaging and seeding), `tests/`.
+Other files: `config.py` (settings), `logger.py` (logging), `template.yaml` (infrastructure), `apps_script/` (the sheet's Sync menu, pasted into its Apps Script project; never deployed to Lambda), `scripts/` (packaging and seeding), `tests/`.
 
 ## Local development
 
@@ -100,8 +104,14 @@ Steps that need the account owner. Everything else is in the repo. Region us-eas
 5. **Test locally:** `.venv/Scripts/python.exe etl.py`; check the console output, the Invoices and Sync Status tabs, and the new backup in the S3 bucket.
 6. **Test on Lambda:** Lambda console, the function, Test, event `{}`. Check the same things, plus the CloudWatch log group `/qbo-sheets-etl/sync`.
 7. **Turn on the schedule:** `sam deploy --profile qbo-sheets-etl --parameter-overrides ScheduleState=ENABLED` (other saved parameters are kept).
-8. **Clean up:** delete `credentials.json`, and disable the old Windows Task Scheduler task if there is one.
-9. **QBO production keys:** get an initial refresh token for the production app, put the `QBO_*` values in `.env`, run `seed_secrets.py --force`, and deploy with `QboEnvironment=production`. Change `START_DATE` if production needs a different range.
+8. **"Sync now" button (optional):**
+   1. In the sheet, Extensions, Apps Script. In Project Settings tick "Show 'appsscript.json' manifest file in editor", then replace `appsscript.json` and `Code.gs` with the files in `apps_script/`.
+   2. Run `logClientId` once from the editor and approve the prompt (Google warns the app is unverified: Advanced, Go to the project). The execution log shows the client ID.
+   3. Deploy with `GoogleScriptClientId` set to that ID and `AllowedSyncEmails` to the Google accounts allowed to sync (comma separated), in `samconfig.toml` too.
+   4. In the script's Project Settings, add the script property `SYNC_URL` with the stack's `SyncUrl` output.
+   5. Reload the sheet and pick Sync, Sync now. Works in a desktop browser; Apps Script menus don't run in the Sheets mobile app.
+9. **Clean up:** delete `credentials.json`, and disable the old Windows Task Scheduler task if there is one.
+10. **QBO production keys:** get an initial refresh token for the production app, put the `QBO_*` values in `.env`, run `seed_secrets.py --force`, and deploy with `QboEnvironment=production`. Change `START_DATE` if production needs a different range.
 
 ## Runbook
 
@@ -113,5 +123,7 @@ Steps that need the account owner. Everything else is in the repo. Region us-eas
 - **Switch between a key and federation:** set up the other option (setup step 4), save it as `credentials.json`, run `seed_secrets.py --force`. Only the Google secret changes when `.env` has none of the QBO credentials (`QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_REDIRECT_URI`, `QBO_REALM_ID`, `QBO_REFRESH_TOKEN`); `QBO_SECRET_ID` and `QBO_ENVIRONMENT` are settings and stay.
 - **Undo a bad secret write:** Secrets Manager console, the secret, Versions; the previous value is `AWSPREVIOUS`.
 - **Change a setting** (spreadsheet, schedule, time zone, retention, QBO environment): `sam deploy --profile qbo-sheets-etl --parameter-overrides Name=value`, and the same value in `samconfig.toml`'s `parameter_overrides`, which every later `sam deploy` sends. Don't edit the function's environment variables in the Lambda console: the stack doesn't know about the change, and a later deploy can silently put the old value back. `START_DATE`, `CUSTOM_FIELDS` and `TEXT_COLUMNS` are in the code: change them, then deploy a code change. A new custom field column goes at the end of `CUSTOM_FIELDS`; add it to `TEXT_COLUMNS` too if its values must stay text.
+- **"Sync not started" in the sheet:** the message says why. "A sync is already running": wait a few seconds and press it again. "Manual sync is not set up": `GoogleScriptClientId` or `AllowedSyncEmails` is empty. "Invalid Google identity token": usually a wrong `GoogleScriptClientId` (it changes if the script is moved to another Google Cloud project; rerun `logClientId`). "... is not allowed to start a sync": add the account to `AllowedSyncEmails` and deploy. Refusals are logged as warnings in CloudWatch, without the token.
+- **Let someone else use Sync now:** share the sheet with them, add their Google account to `AllowedSyncEmails` (in `samconfig.toml` too) and deploy. Removing them from the list cuts them off even if they can still edit the sheet.
 - **A custom field column is blank:** look in CloudWatch Logs for "was not found on any invoice". It lists the custom field names QBO returned; put the right one in `CUSTOM_FIELDS` and deploy.
 - **Deploy a code change:** run `.venv/Scripts/python.exe -m pytest`, then `scripts/stage_lambda.py`, `sam build`, `sam deploy --profile qbo-sheets-etl`.

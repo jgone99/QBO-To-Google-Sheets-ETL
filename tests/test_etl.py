@@ -162,6 +162,62 @@ def test_handler_without_spreadsheet_id_only_logs(pipeline, monkeypatch, caplog)
     assert "Run failed" in caplog.text
 
 
+# --- the "Sync now" button (function URL requests)
+
+FUNCTION_ARN = "arn:aws:lambda:us-east-2:123456789012:function:qbo-sheets-etl-SyncFunction-abc"
+URL_EVENT = {"requestContext": {"http": {"method": "POST"}}, "headers": {"authorization": "Bearer token"}}
+
+
+@pytest.fixture
+def button(pipeline, monkeypatch):
+    monkeypatch.setattr(etl.sync_request, "authorize", pipeline.authorize)
+    monkeypatch.setattr(etl, "start_background_run", pipeline.start)
+    pipeline.authorize.return_value = "owner@example.com"
+    return mock.Mock(invoked_function_arn=FUNCTION_ARN)
+
+
+def test_button_starts_a_background_sync_and_answers_at_once(pipeline, button):
+    response = etl.handler(URL_EVENT, button)
+
+    assert response["statusCode"] == 202
+    pipeline.authorize.assert_called_once_with(URL_EVENT)
+    pipeline.start.assert_called_once_with(FUNCTION_ARN, {"requested_by": "owner@example.com"})
+    # the request itself syncs nothing and never reads the credentials
+    pipeline.fetch.assert_not_called()
+    pipeline.qbo_store.assert_not_called()
+    pipeline.sheets_store.assert_not_called()
+
+
+def test_refused_button_request_is_answered_not_raised(pipeline, button, caplog):
+    pipeline.authorize.side_effect = etl.sync_request.Rejected(403, "someone@example.com is not allowed to start a sync")
+
+    with caplog.at_level(logging.WARNING):
+        response = etl.handler(URL_EVENT, button)
+
+    assert response == {"statusCode": 403, "headers": {"Content-Type": "text/plain"},
+                        "body": "someone@example.com is not allowed to start a sync"}
+    pipeline.start.assert_not_called()
+    pipeline.failure.assert_not_called()
+    assert "Sync request refused (403)" in caplog.text
+
+
+def test_failure_to_start_the_background_sync_raises(pipeline, button):
+    # raising makes it a Lambda error, so the alarm reports it
+    pipeline.start.side_effect = RuntimeError("AccessDenied")
+
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        etl.handler(URL_EVENT, button)
+
+
+def test_background_run_is_a_normal_sync(pipeline, caplog):
+    with caplog.at_level(logging.INFO):
+        assert etl.handler({"requested_by": "owner@example.com"}, None) == {"status": "succeeded"}
+
+    pipeline.fetch.assert_called_once()
+    pipeline.success.assert_called_once()
+    assert "Sync requested by owner@example.com" in caplog.text
+
+
 # --- running etl.py locally
 
 @pytest.fixture

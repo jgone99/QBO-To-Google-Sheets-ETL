@@ -19,6 +19,7 @@ FILES = [
     "invoice_sheet.py",
     "logger.py",
     "status_sheet.py",
+    "sync_request.py",
     "requirements.txt",
 ]
 

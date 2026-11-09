@@ -2,7 +2,7 @@ from unittest import mock
 
 import pytest
 
-from aws_client import account, credentials, secrets, session, storage
+from aws_client import account, credentials, functions, secrets, session, storage
 
 # conftest blocks get_session; kept here to test the real one
 REAL_GET_SESSION = session.get_session
@@ -36,6 +36,7 @@ def test_one_session_is_created_in_the_app_region(monkeypatch):
     (secrets, "secretsmanager"),
     (storage, "s3"),
     (account, "sts"),
+    (functions, "lambda"),
 ])
 def test_clients_come_from_the_shared_session(module, service, monkeypatch, boto_session):
     monkeypatch.setattr(module, "_client", None)
@@ -52,6 +53,19 @@ def test_account_id_comes_from_the_caller_identity(monkeypatch):
     monkeypatch.setattr(account, "_get_client", lambda: sts)
 
     assert account.get_account_id() == "123456789012"
+
+
+def test_background_run_does_not_wait(monkeypatch):
+    lambda_client = mock.Mock()
+    monkeypatch.setattr(functions, "_get_client", lambda: lambda_client)
+
+    functions.start_background_run("arn:aws:lambda:us-east-2:123456789012:function:f", {"requested_by": "a@example.com"})
+
+    lambda_client.invoke.assert_called_once_with(
+        FunctionName="arn:aws:lambda:us-east-2:123456789012:function:f",
+        InvocationType="Event",
+        Payload=b'{"requested_by": "a@example.com"}',
+    )
 
 
 def test_aws_credentials_come_from_the_shared_session(boto_session):

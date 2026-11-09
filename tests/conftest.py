@@ -11,6 +11,7 @@ import qbo_client.auth
 import qbo_client.client
 import spreadsheet_client.auth
 import spreadsheet_client.client
+import sync_request
 
 
 class NetworkBlocked(Exception):
@@ -30,6 +31,8 @@ def no_network(monkeypatch):
     monkeypatch.setattr(qbo_client.auth, "AuthClient", _blocked)
     monkeypatch.setattr(qbo_client.client._session, "get", _blocked)
     monkeypatch.setattr(spreadsheet_client.client, "get_session", _blocked)
+    # verifying a "Sync now" token fetches Google's signing certificates
+    monkeypatch.setattr(sync_request.id_token, "verify_oauth2_token", _blocked)
     # every AWS client and credential comes from the one shared session
     monkeypatch.setattr(aws_client.session, "get_session", _blocked)
 
